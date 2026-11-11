@@ -10,7 +10,7 @@ import logging
 import os
 from typing import AsyncIterator, Callable
 
-from .config import WORKSPACE, Settings
+from .config import WORKSPACE, Settings, child_env
 
 log = logging.getLogger("avatar.brain")
 
@@ -100,7 +100,7 @@ class FastBrain:
         s = self.settings
         cwd = WORKSPACE / "brain"
         cwd.mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ)
+        env = child_env()                  # 带上代理：从图形界面启动时环境里没有
         env["MAX_THINKING_TOKENS"] = "0"   # 接话不需要深思，关掉能省近一秒
         self._proc = await asyncio.create_subprocess_exec(
             "claude", "-p",

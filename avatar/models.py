@@ -13,6 +13,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .config import child_env
+
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / "models"
 
@@ -108,7 +110,7 @@ def download(m: ModelFile) -> None:
         r = subprocess.run(
             ["curl", "-fL", "--retry", "5", "--retry-all-errors", "--retry-delay", "3",
              "-C", "-", "--connect-timeout", "20", "-sS", "-o", str(tmp), url],
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=child_env(),
         )
         if r.returncode != 0:
             errors.append(r.stderr.strip()[-160:])

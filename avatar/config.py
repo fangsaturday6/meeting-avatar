@@ -82,3 +82,63 @@ class Settings:
             except (ValueError, OSError):
                 pass  # 文件坏了就用默认值
         return s
+
+
+# ---------- 子进程的网络环境 ----------
+_PROXY_KEYS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY")
+_child_env: dict | None = None
+
+
+def _proxy_from_shell() -> dict:
+    """终端里（~/.zshrc 等）配置的代理。"""
+    import subprocess
+    script = 'print -r -- "__PROXY__${HTTPS_PROXY:-$https_proxy}|${HTTP_PROXY:-$http_proxy}|${ALL_PROXY:-$all_proxy}|${NO_PROXY:-$no_proxy}"'
+    try:
+        out = subprocess.run(["zsh", "-ilc", script], capture_output=True, text=True, timeout=10,
+                             stdin=subprocess.DEVNULL).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    for line in out.splitlines():
+        if "__PROXY__" in line:
+            vals = line.split("__PROXY__", 1)[1].split("|")
+            return {k: v for k, v in zip(_PROXY_KEYS, vals) if v}
+    return {}
+
+
+def _proxy_from_system() -> dict:
+    """macOS「系统设置 › 网络 › 代理」里配置的代理。"""
+    import re
+    import subprocess
+    try:
+        out = subprocess.run(["scutil", "--proxy"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    kv = dict(re.findall(r"^\s*(\w+)\s*:\s*(\S+)\s*$", out, flags=re.M))
+    found = {}
+    for scheme, key in (("HTTPS", "HTTPS_PROXY"), ("HTTP", "HTTP_PROXY")):
+        if kv.get(f"{scheme}Enable") == "1" and kv.get(f"{scheme}Proxy"):
+            found[key] = f"http://{kv[f'{scheme}Proxy']}:{kv.get(f'{scheme}Port', '80')}"
+    return found
+
+
+def child_env() -> dict:
+    """给子进程（本机 claude、curl）用的环境变量。
+
+    从图形界面启动的程序拿不到终端里配置的代理，本机 claude 就会连不上、一直卡住。
+    所以环境里没有代理时，依次去终端配置和系统设置里找，找到就补上。结果只算一次。
+    """
+    global _child_env
+    if _child_env is None:
+        env = dict(os.environ)
+        if not any(env.get(k) or env.get(k.lower()) for k in _PROXY_KEYS[:3]):
+            found = _proxy_from_shell() or _proxy_from_system()
+            env.update(found)
+            env.update({k.lower(): v for k, v in found.items()})
+        _child_env = env
+    return dict(_child_env)
+
+
+def proxy_url() -> str | None:
+    env = child_env()
+    return env.get("HTTPS_PROXY") or env.get("https_proxy") or env.get("ALL_PROXY") or env.get("all_proxy") or None
+

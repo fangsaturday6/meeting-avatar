@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from .config import DESIGN_DIR, WORKSPACE, Settings
+from .config import DESIGN_DIR, WORKSPACE, Settings, child_env
 from .floor import WorkResult
 from .meeting import Task
 
@@ -138,7 +138,7 @@ class SlowBrain:
     async def _attempt(self, cmd: list[str], cwd: Path, on_progress: Callable[[str], None]) -> tuple[WorkResult | None, bool]:
         """跑一次。返回（结果，是否卡死）。超过 STALL 秒没有任何输出算卡死。"""
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL,
+            *cmd, cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL, env=child_env(),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=16 << 20,
         )
         result: WorkResult | None = None

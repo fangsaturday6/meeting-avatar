@@ -90,6 +90,7 @@ class Floor:
     give_up_after = 12.0    # 举手最多等多久；等不到就把话咽回去
     early_cut = 1.5         # 开口后这么短时间内就被打断，算「刚开口就被打断」
     first_token_timeout = 20.0
+    start_timeout = 40.0    # 入会时大脑预热最多等多久
     task_timeout = 600.0    # 后台任务最长多久
     echo_threshold = 0.6
 
@@ -133,8 +134,12 @@ class Floor:
         self._pending_sid, self._restarts, self._early_cuts = None, 0, 0
         self.m.set_status("starting")      # 大脑预热要几秒
         try:
-            await self.brain.start()
+            await asyncio.wait_for(self.brain.start(), self.start_timeout)
             self.m.set_flag("brain_ok", True)
+        except asyncio.TimeoutError:
+            # 连不上也先让会议开始：字幕照常，界面提示大脑连不上，之后每次有人说话都会再试
+            log.warning("大脑 %.0f 秒没连上，先开始会议", self.start_timeout)
+            self.m.set_flag("brain_ok", False)
         except Exception:  # noqa: BLE001
             log.exception("大脑启动失败")
             self.m.set_flag("brain_ok", False)

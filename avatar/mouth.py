@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from . import models
-from .config import Settings
+from .config import Settings, proxy_url
 
 log = logging.getLogger("avatar.mouth")
 
@@ -88,7 +88,7 @@ class Mouth:
 
         voice = voice or (self.settings.voice if self.settings.voice != "local" else "zh-CN-YunxiNeural")
         rate = f"{round((self.settings.speed - 1) * 100):+d}%"
-        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or None
+        proxy = proxy_url()
         buf = bytearray()
         async for chunk in edge_tts.Communicate(text, voice, rate=rate, proxy=proxy).stream():
             if chunk["type"] == "audio":
