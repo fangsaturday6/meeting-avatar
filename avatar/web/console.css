@@ -53,7 +53,8 @@
 #say-text { flex: 1; }
 
 /* ---------- 侧栏 ---------- */
-#side { display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow-y: auto; }
+#side { display: flex; flex-direction: column; gap: 16px; min-height: 0; min-width: 0; overflow-y: auto; }
+#side > * { flex: none; min-width: 0; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
 .card h2 { font-size: 14px; margin: 0 0 10px; color: var(--ink2); font-weight: 600; }
 details.card > summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; }
@@ -64,14 +65,14 @@ details.card > summary h2 { margin: 0; }
 details.card[open] > summary { margin-bottom: 12px; }
 
 #task-form { display: grid; grid-template-columns: auto 1fr auto; gap: 6px; }
-#task-form select, #task-form input, #settings input:not([type="range"]):not([type="checkbox"]), #settings select, #settings textarea {
+#task-form select, #task-form input, #settings input:not([type="range"]):not([type="checkbox"]):not([type="radio"]), #settings select, #settings textarea {
   border: 1px solid var(--line); background: var(--bg); border-radius: 9px; padding: 8px 10px; min-width: 0; width: 100%; font-size: 14px;
 }
 #tasks { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 #tasks:empty { display: none; }
-.task { border: 1px solid var(--line); border-radius: 11px; overflow: hidden; }
+.task { border: 1px solid var(--line); border-radius: 11px; overflow: hidden; min-width: 0; }
 .task[data-on-board="1"] { border-color: var(--thinking); }
-.task-head { width: 100%; border: 0; background: transparent; text-align: left; padding: 9px 11px; display: grid; grid-template-columns: auto 1fr; gap: 3px 9px; align-items: center; }
+.task-head { width: 100%; border: 0; background: transparent; text-align: left; padding: 9px 11px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 9px; align-items: center; }
 .task-head:hover { background: var(--hover); }
 .task .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); }
 .task[data-state="running"] .dot { background: transparent; border: 2px solid var(--thinking); border-right-color: transparent; animation: av-spin .8s linear infinite; width: 11px; height: 11px; }
@@ -93,7 +94,8 @@ details.card[open] > summary { margin-bottom: 12px; }
 #settings .field { display: grid; gap: 5px; font-size: 13px; color: var(--ink2); }
 .segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
 .segmented label { display: block !important; text-align: center; padding: 8px 6px; font-size: 14px !important; color: var(--ink) !important; cursor: pointer; }
-.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented label { position: relative; }
+.segmented input { position: absolute; inset: 0; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
 .segmented label:has(input:checked) { background: var(--listening); color: #fff !important; font-weight: 600; }
 .segmented label:has(input:focus-visible) { outline: 2px solid var(--listening); outline-offset: -2px; }
 .field-error { margin: 6px 0 0; color: var(--danger); font-size: 13px; }
