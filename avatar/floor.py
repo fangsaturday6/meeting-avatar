@@ -159,7 +159,8 @@ class Floor:
         self._cancel(self._barge_task)
         self._arm_nudge()
 
-    async def on_utterance(self, text: str, embedding=None, speaker_name: str | None = None) -> Line | None:
+    async def on_utterance(self, text: str, embedding=None, speaker_name: str | None = None,
+                           seconds: float = 10.0) -> Line | None:
         """有人说完了一句话。返回字幕行；被判为回声则返回 None。"""
         text = text.strip()
         if not self.m.active or not text:
@@ -172,7 +173,7 @@ class Floor:
                 self._wake.set()
             return None
 
-        sid = self.m.speakers.by_name(speaker_name) if speaker_name else self.m.speakers.assign(embedding)
+        sid = self.m.speakers.by_name(speaker_name) if speaker_name else self.m.speakers.assign(embedding, seconds)
         self.m.emit("speaker", speaker=self.m.speakers.speakers[sid].to_dict())
         line = self.m.add_line("human", text, sid)
         self._nudge_ok = True

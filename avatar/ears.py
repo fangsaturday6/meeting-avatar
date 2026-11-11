@@ -27,7 +27,7 @@ class Ears:
         self,
         on_speech_start: Callable[[], None],
         on_speech_end: Callable[[float], None],
-        on_utterance: Callable[[str, np.ndarray | None], Awaitable[object]],
+        on_utterance: Callable[..., Awaitable[object]],   # (text, embedding, seconds=…)
     ):
         self.on_speech_start = on_speech_start
         self.on_speech_end = on_speech_end
@@ -107,29 +107,30 @@ class Ears:
         while True:
             fut = await self._results.get()
             try:
-                text, emb = await fut
+                text, emb, seconds = await fut
                 if text:
-                    await self.on_utterance(text, emb)
+                    await self.on_utterance(text, emb, seconds=seconds)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
                 log.exception("这段话没识别出来")
 
     # ---- 识别（线程池里） ----
-    def _recognize(self, samples: np.ndarray) -> tuple[str, np.ndarray | None]:
+    def _recognize(self, samples: np.ndarray) -> tuple[str, np.ndarray | None, float]:
+        seconds = len(samples) / SAMPLE_RATE
         st = self._asr.create_stream()
         st.accept_waveform(SAMPLE_RATE, samples)
         self._asr.decode_stream(st)
         text = st.result.text.strip()
         if not re.search(r"[\w一-鿿]", text):
-            return "", None
+            return "", None, seconds
         emb = None
         if self._spk is not None and len(samples) >= SAMPLE_RATE * self.min_embed_seconds:
             s = self._spk.create_stream()
             s.accept_waveform(SAMPLE_RATE, samples)
             s.input_finished()
             emb = np.asarray(self._spk.compute(s), dtype=np.float32)
-        return text, emb
+        return text, emb, seconds
 
     def close(self) -> None:
         if self._consumer:

@@ -24,7 +24,13 @@ def _unit(v: np.ndarray) -> np.ndarray:
 
 
 class SpeakerBook:
-    def __init__(self, threshold: float = 0.45):
+    """实测（CAM++ 声纹）：同一个人的长句相似度 0.82~0.95，不同的人一般低于 0.42；
+    一两秒的短句不稳定，和本人长句的相似度可能只有 0.46。所以：
+    阈值取 0.55；短句只用来归属，不用来新建说话人，也不更新质心。"""
+
+    reliable_seconds = 2.0
+
+    def __init__(self, threshold: float = 0.55):
         self.threshold = threshold
         self.speakers: dict[int, Speaker] = {}
         self.last_id: int | None = None
@@ -36,15 +42,19 @@ class SpeakerBook:
         self._next += 1
         return sp
 
-    def assign(self, embedding: np.ndarray | None) -> int:
-        """给一段语音找说话人。没有声纹（片段太短）时沿用上一位。"""
+    def _reuse_last(self) -> int:
+        if self.last_id is None:
+            self.last_id = self._new().id
+        self.speakers[self.last_id].count += 1
+        return self.last_id
+
+    def assign(self, embedding: np.ndarray | None, seconds: float = 10.0) -> int:
+        """给一段语音找说话人。seconds 是这段语音的长度。没有声纹时沿用上一位。"""
         if embedding is None or len(embedding) == 0:
-            if self.last_id is None:
-                self.last_id = self._new().id
-            self.speakers[self.last_id].count += 1
-            return self.last_id
+            return self._reuse_last()
 
         e = _unit(embedding)
+        reliable = seconds >= self.reliable_seconds
         best, best_sim = None, -1.0
         for sp in self.speakers.values():
             if sp.centroid is None:
@@ -53,9 +63,11 @@ class SpeakerBook:
             if sim > best_sim:
                 best, best_sim = sp, sim
         if best is None or best_sim < self.threshold:
+            if not reliable and self.last_id is not None:
+                return self._reuse_last()      # 短句对不上谁：多半还是刚才那位
             best = self._new()
             best.centroid = e
-        else:
+        elif reliable:
             # 质心滑动更新：样本越多越稳，但保留适应性
             w = min(best.count, 20)
             best.centroid = _unit(best.centroid * w + e)

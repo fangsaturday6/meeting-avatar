@@ -19,8 +19,8 @@ async def test_ears_hear_one_sentence():
         pytest.skip("模型还没下载")
     events, got = [], []
 
-    async def on_utt(text, emb):
-        got.append((text, emb))
+    async def on_utt(text, emb, seconds=0.0):
+        got.append((text, emb, seconds))
 
     ears = Ears(lambda: events.append("start"), lambda ago: events.append("end"), on_utt)
     t0 = time.time(); ears.load(); print(f"\n模型加载 {time.time()-t0:.1f}s 声纹模型={ears.has_speaker_model}")

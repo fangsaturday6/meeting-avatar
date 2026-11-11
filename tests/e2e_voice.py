@@ -14,7 +14,7 @@ import time
 import httpx
 import websockets
 
-from tests.audio import chunks, say_pcm, silence
+from tests.audio import chunks, local_pcm, say_pcm, silence
 
 PORT = 8766
 BASE = f"http://127.0.0.1:{PORT}"
@@ -131,7 +131,7 @@ async def main() -> int:
             await http.patch("/api/settings", json={"topic": "讨论新版应用的登录和支付排期", "silence_nudge": 0})
             log("合成两位与会者的语音…")
             a1 = say_pcm("大家好，我们今天讨论一下新版应用的排期。", "Tingting")
-            b1 = say_pcm("小克，你觉得我们应该先做登录，还是先做支付？", "Meijia")
+            b1 = local_pcm("小克，你觉得我们应该先做登录，还是先做支付？")   # 另一种嗓音 = 另一个人
             a2 = say_pcm("等一下，我先插一句。预算其实还没有批下来，这个要先跟财务确认。", "Tingting")
             await http.post("/api/meeting/start")
             log("会议开始")

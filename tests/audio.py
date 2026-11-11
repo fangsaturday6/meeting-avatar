@@ -37,3 +37,20 @@ def chunks(pcm: bytes, ms: int = 100):
     step = 16000 * 2 * ms // 1000
     for i in range(0, len(pcm), step):
         yield pcm[i:i + step]
+
+
+def local_pcm(text: str, speed: float = 1.0) -> bytes:
+    """用本地合成的嗓音（和系统嗓音差别很大，适合模拟另一个人），转成 16k PCM。"""
+    import io
+
+    import numpy as np
+
+    from avatar.config import Settings
+    from avatar.mouth import Mouth
+    s = Settings(); s.speed = speed
+    m = Mouth(s); m.load()
+    w = wave.open(io.BytesIO(m._synth_local(text)))
+    x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32)
+    n = int(len(x) * 16000 / w.getframerate())
+    y = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
+    return y.astype(np.int16).tobytes()

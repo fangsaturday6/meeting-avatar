@@ -46,6 +46,8 @@ PROMPTS = {
 # 每类任务最多做多久（秒）。会议在等，宁可说没查到也不要一直卡着
 TIME_LIMITS = {"查资料": 240, "查代码": 240, "做设计": 600}
 
+STALL = 60   # 这么久没有任何输出就当作卡死，重来一次
+
 TOOLS = {
     "查资料": "WebSearch,WebFetch",
     "查代码": "Read,Grep,Glob",
@@ -109,40 +111,58 @@ class SlowBrain:
             extra += ["--model", s.slow_model]
 
         cmd = ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+               "--include-partial-messages",     # 生成过程中持续有输出，才能分辨「在干活」和「卡死了」
                "--no-session-persistence", "--tools", TOOLS[task.kind],
                "--allowedTools", TOOLS[task.kind], *extra]
         on_progress("正在准备")
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=16 << 20,
-        )
         result: WorkResult | None = None
         try:
             async with asyncio.timeout(TIME_LIMITS[task.kind]):
-                async for raw in proc.stdout:
-                    try:
-                        ev = json.loads(raw)
-                    except ValueError:
-                        continue
-                    if ev.get("type") == "assistant":
-                        for block in ev.get("message", {}).get("content", []):
-                            if block.get("type") == "tool_use":
-                                on_progress(describe(block.get("name", ""), block.get("input") or {}))
-                    elif ev.get("type") == "result":
-                        text = (ev.get("result") or "").strip()
-                        ok = not ev.get("is_error") and bool(text)
-                        result = WorkResult(ok, text or "没有得到结果")
-                await proc.wait()
+                for attempt in (1, 2):
+                    result, stalled = await self._attempt(cmd, cwd, on_progress)
+                    if result is not None or not stalled:
+                        break
+                    if attempt == 1:
+                        on_progress("网络不稳，正在重试")
         except asyncio.TimeoutError:
             return WorkResult(False, "花的时间太长，没做完")
-        finally:
-            if proc.returncode is None:
-                proc.kill()
         if result is None:
-            return WorkResult(False, "干活的进程中途退出了")
+            return WorkResult(False, "网络不稳，试了两次都没做成")
         if result.ok and artifact:
             if (cwd / "index.html").exists():
                 result.artifact = artifact
             else:
                 return WorkResult(False, "设计稿没有生成出来")
         return result
+
+    async def _attempt(self, cmd: list[str], cwd: Path, on_progress: Callable[[str], None]) -> tuple[WorkResult | None, bool]:
+        """跑一次。返回（结果，是否卡死）。超过 STALL 秒没有任何输出算卡死。"""
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=str(cwd), stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=16 << 20,
+        )
+        result: WorkResult | None = None
+        try:
+            while True:
+                try:
+                    raw = await asyncio.wait_for(proc.stdout.readline(), STALL)
+                except asyncio.TimeoutError:
+                    return None, True
+                if not raw:
+                    break
+                try:
+                    ev = json.loads(raw)
+                except ValueError:
+                    continue
+                if ev.get("type") == "assistant":
+                    for block in ev.get("message", {}).get("content", []):
+                        if block.get("type") == "tool_use":
+                            on_progress(describe(block.get("name", ""), block.get("input") or {}))
+                elif ev.get("type") == "result":
+                    text = (ev.get("result") or "").strip()
+                    ok = not ev.get("is_error") and bool(text)
+                    result = WorkResult(ok, text or "没有得到结果")
+            return result, False
+        finally:
+            if proc.returncode is None:
+                proc.kill()
