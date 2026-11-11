@@ -9,6 +9,7 @@ import os
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 import httpx
@@ -106,6 +107,7 @@ class FakeStage:
 
 async def main() -> int:
     env = dict(os.environ)
+    env["AVATAR_WORKSPACE"] = tempfile.mkdtemp(prefix="avatar-e2e-")   # 不碰真实的设置文件
     server = subprocess.Popen([sys.executable, "-m", "avatar", "--port", str(PORT)], env=env,
                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     failures: list[str] = []

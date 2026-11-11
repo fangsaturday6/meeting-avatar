@@ -9,7 +9,6 @@
 .av-smile { fill: none; stroke: #fff; stroke-width: 9; stroke-linecap: round; }
 .av-body { animation: av-breathe 4.6s ease-in-out infinite; }
 .av-eye { animation: av-blink 5.2s infinite; transition: transform .25s ease; }
-.av-eye.r { animation-delay: .04s; }
 .av-mouth, .av-hand, .av-dots, .av-orbit { opacity: 0; transition: opacity .2s ease; }
 
 @keyframes av-breathe { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-WORKSPACE = ROOT / "workspace"
+# 运行时数据（设置、设计稿）。测试用 AVATAR_WORKSPACE 指到临时目录，免得改掉真实设置
+WORKSPACE = Path(os.environ.get("AVATAR_WORKSPACE") or ROOT / "workspace")
 SETTINGS_FILE = WORKSPACE / "settings.json"
 DESIGN_DIR = WORKSPACE / "designs"
 
