@@ -11,6 +11,8 @@ class FakeBrain:
         self.cancels = 0
         self.delay = delay
         self.started = False
+        self.on_retry = None          # Floor 会接上：大脑请求重试时回调
+        self.retries_before_reply = 0  # 回答前先模拟几次网络重试
 
     async def start(self):
         self.started = True
@@ -23,6 +25,10 @@ class FakeBrain:
         reply = self.replies.pop(0) if self.replies else "[静]"
 
         async def gen():
+            for n in range(self.retries_before_reply):
+                await asyncio.sleep(self.delay)
+                if self.on_retry:
+                    self.on_retry(n + 1)
             for i in range(0, len(reply), 3):
                 await asyncio.sleep(self.delay)
                 yield reply[i:i + 3]

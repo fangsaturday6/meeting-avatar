@@ -36,7 +36,7 @@ function renderAlerts() {
   if (ui.error) items.push(['danger', esc(ui.error)]);
   if (!state.connected) items.push(['danger', '和后台断开了，正在重连']);
   else {
-    if (!state.brain_ok) items.push(['danger', '大脑暂时连不上，它现在不会回应']);
+    if (!state.brain_ok) items.push(['danger', '网络不稳，它的大脑暂时连不上，正在自动重试。这段时间它不会回应']);
     if (active && !state.stage_online) items.push(['danger', '形象页还没接通，它现在听不到也说不出。<a href="/stage" target="avatar-stage">去接通</a>']);
     if (!state.ready.ears) items.push(['info', '语音模型还没装好，现在只能打字交流']);
     else if (!state.ready.speakers) items.push(['info', '声纹模型还没装好，暂时分不清是谁在说话']);

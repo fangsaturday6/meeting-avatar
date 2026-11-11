@@ -67,6 +67,7 @@ class _Attempt:
     aborted: str = ""
     done: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task | None = None
+    queue: asyncio.Queue | None = None  # 这次发言的待播队列
     trigger_speaker: int | None = None  # 是谁的话引出了这次发言；None = 没人问，是它自己想说
     push: bool = False                  # 顶着说：周围一直有声音，不再因为有人声就停，只认「停一下」和按钮
     speak_started: float = 0.0
@@ -84,6 +85,8 @@ _STOP_WORDS = re.compile(r"停一下|停一停|停下|等一下|等等|等会|�
 
 
 class Floor:
+    stall_line = "不好意思，我这边网络有点卡，稍等一下。"   # 大脑连不上时，用本地语音先说这句
+    stall_line_every = 45.0  # 这句话最多多久说一次
     give_up_after = 12.0    # 举手最多等多久；等不到就把话咽回去
     early_cut = 1.5         # 开口后这么短时间内就被打断，算「刚开口就被打断」
     first_token_timeout = 20.0
@@ -116,6 +119,9 @@ class Floor:
         self._early_cuts = 0           # 连续几次「刚开口就被打断」
         # 可选：问「现在正在说话的是谁」，返回声纹向量或 None。由耳朵提供
         self.voice_probe: Callable[[], Awaitable[object]] | None = None
+        self._last_stall_line = -1e9
+        if hasattr(brain, "on_retry"):
+            brain.on_retry = self._brain_retrying
 
     # ================= 生命周期 =================
     async def start(self) -> None:
@@ -301,6 +307,7 @@ class Floor:
         self.m.set_status("thinking")
         rs = ReplyStream()
         queue: asyncio.Queue = asyncio.Queue()
+        att.queue = queue
         speaker = asyncio.create_task(self._speak(att, queue))
         reply = None
         t0, first = self.clock(), None
@@ -350,6 +357,17 @@ class Floor:
             speaker.cancel()
             self._cancel(*att.synths)
             raise
+
+    def _brain_retrying(self, attempt: int) -> None:
+        """大脑的请求失败、正在重试（多半是网络不稳）。让界面看得见；有人在等回答时先用本地语音打个招呼。"""
+        log.warning("大脑连不上，第 %d 次重试", attempt)
+        self.m.set_flag("brain_ok", False)
+        att = self._attempt
+        now = self.clock()
+        if (att and att.queue is not None and att.trigger_speaker is not None and not att.aborted
+                and not att.planned and now - self._last_stall_line > self.stall_line_every):
+            self._last_stall_line = now
+            self._plan(att, att.queue, self.stall_line)
 
     def _dispatch_from_brain(self, kind: str, brief: str) -> None:
         # 大脑重新组织发言时可能重复派同一件事，正在做的就不再派

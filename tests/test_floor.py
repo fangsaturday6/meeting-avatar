@@ -353,3 +353,31 @@ async def test_brain_that_never_answers_is_dropped_after_timeout():
     await settle(lambda: not m.brain_ok and m.status == "listening")
     assert brain.cancels == 1 and player.played == []
     await floor.stop()
+
+
+async def test_network_trouble_is_visible_and_it_says_so_then_answers():
+    m, brain, mouth, player, floor = await make(["先做登录。"], brain_delay=0.03)
+    brain.retries_before_reply = 2
+    q = m.subscribe()
+    await floor.on_utterance("小克先做什么", speaker_name="张三")
+    await settle(lambda: len(player.played) >= 2 and m.status == "listening")
+    assert player.texts[0] == floor.stall_line              # 先用本地语音说网络卡了（只说一次）
+    assert "".join(player.texts) == floor.stall_line + "先做登录。"
+    flags = []
+    while not q.empty():
+        ev = q.get_nowait()
+        if ev["type"] == "flag" and ev["name"] == "brain_ok":
+            flags.append(ev["value"])
+    assert flags == [False, True]                           # 界面上先标出连不上，恢复后消掉
+    await floor.stop()
+
+
+async def test_network_trouble_stays_quiet_when_nobody_asked():
+    m, brain, mouth, player, floor = await make(["[静]", "[静]"], nudge=0.05, brain_delay=0.02)
+    await floor.on_utterance("就这样", speaker_name="张三")
+    await settle(lambda: len(brain.prompts) == 1 and m.status == "listening")
+    brain.retries_before_reply = 1                          # 冷场提示这一轮遇到网络重试
+    await settle(lambda: len(brain.prompts) == 2 and m.status == "listening")
+    await asyncio.sleep(0.1)
+    assert player.played == []                              # 没人在等它，不用出声
+    await floor.stop()

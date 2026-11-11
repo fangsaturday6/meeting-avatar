@@ -71,6 +71,8 @@ class FastBrain:
         self._proc: asyncio.subprocess.Process | None = None
         self._inflight = False
         self._req = 0
+        # 请求失败正在重试时回调（第几次重试）。网络不稳时界面靠它提示「大脑连不上」
+        self.on_retry: Callable[[int], None] | None = None
 
     # ---- 生命周期 ----
     async def start(self) -> None:
@@ -156,8 +158,13 @@ class FastBrain:
                 e = ev.get("event", {})
                 if e.get("type") == "content_block_delta" and e.get("delta", {}).get("type") == "text_delta":
                     yield e["delta"]["text"]
+            elif t == "system" and ev.get("subtype") == "api_retry":
+                if self.on_retry:
+                    self.on_retry(int(ev.get("attempt") or 1))
             elif t == "result":
                 self._inflight = False
+                if ev.get("is_error") and ev.get("subtype") != "error_during_execution":
+                    raise BrainError("大脑这一轮没有成功：" + str(ev.get("result") or ev.get("subtype"))[:120])
                 return
 
     async def _settle(self) -> None:
