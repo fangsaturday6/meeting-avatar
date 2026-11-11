@@ -105,8 +105,7 @@ async def test_barge_in_stops_speech_and_tells_brain():
     await floor.on_utterance("小克讲讲方案", speaker_name="张三")
     await settle(lambda: len(player.played) == 2 and m.status == "speaking")
     floor.on_speech_start()                      # 有人插话
-    await settle(lambda: player.stops == 1)
-    assert m.status == "listening"
+    await settle(lambda: player.stops == 1 and m.status == "listening")
     bot_line = [l for l in m.lines if l.who == "bot"][0]
     assert bot_line.cut
     floor.on_speech_end()

@@ -32,10 +32,11 @@ class SentenceSplitter:
     """把流式文字切成可以立刻送去合成的句子。
 
     规则：句号、问号、叹号、分号、换行处切；第一段为了抢时间，逗号处也切（至少 first_min 个字）；
-    一直没有句号的长句，超过 soft_max 个字后在逗号处切。
+    之后每段攒够 soft_max 个字就在逗号处切。段落小，合成才跟得上播放，句子之间不会卡顿
+    （实测本地合成约为 4 倍速：12 个字的一段大约 0.5 秒合成完）。
     """
 
-    def __init__(self, first_min: int = 4, soft_max: int = 28):
+    def __init__(self, first_min: int = 4, soft_max: int = 12):
         self.buf = ""
         self.first = True
         self.first_min = first_min

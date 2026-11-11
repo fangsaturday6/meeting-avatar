@@ -234,6 +234,10 @@ def create_app(hub: Hub | None = None) -> FastAPI:
                 hub.settings.save()
             if "voice" in changed and hasattr(hub.mouth, "reset_online"):
                 hub.mouth.reset_online()
+            if hub.meeting.active and {"name", "topic"} & set(changed):
+                # 会议中途改了名字或背景：下次说话前告诉大脑
+                hub.floor.carry.append(
+                    f"（设置更新：你的名字是「{hub.settings.name}」；会议背景：{hub.settings.topic.strip() or '暂无'}）")
             hub.meeting.emit("settings", settings=hub.settings.to_dict(), changed=changed)
         return {"settings": hub.settings.to_dict(), "changed": changed}
 

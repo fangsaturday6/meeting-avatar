@@ -1,1 +1,74 @@
-<!doctype html><title>console</title>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会议数字人</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="stylesheet" href="/static/avatar.css">
+<link rel="stylesheet" href="/static/console.css">
+</head>
+<body>
+<div id="app" data-status="off" data-working="0" data-hearing="0">
+  <header id="topbar">
+    <div id="identity">
+      <div id="mini-avatar"></div>
+      <strong id="bot-name"></strong>
+      <span id="status-chip"></span>
+    </div>
+    <div id="controls">
+      <a id="link-stage" class="btn ghost" href="/stage" target="avatar-stage">打开形象页</a>
+      <button id="btn-mute" class="btn" type="button" aria-pressed="false" hidden>静音</button>
+      <button id="btn-hush" class="btn" type="button" hidden>让它停下</button>
+      <button id="btn-stop" class="btn danger" type="button" hidden>结束会议</button>
+    </div>
+  </header>
+
+  <ul id="alerts" hidden></ul>
+
+  <main id="layout">
+    <section id="talk">
+      <div id="idle">
+        <div id="idle-avatar"></div>
+        <button id="btn-start" class="btn primary big" type="button">开始会议</button>
+      </div>
+      <div id="speakers" hidden></div>
+      <ol id="transcript" aria-live="polite" hidden></ol>
+      <form id="composer" autocomplete="off" hidden>
+        <input id="say-as" name="speaker" maxlength="30" aria-label="发言人名字" value="我">
+        <input id="say-text" name="text" maxlength="2000" placeholder="打字发言" aria-label="发言内容">
+        <button id="btn-send" class="btn primary" type="submit">发送</button>
+      </form>
+    </section>
+
+    <aside id="side">
+      <section id="tasks-panel" class="card">
+        <h2>后台任务</h2>
+        <form id="task-form" autocomplete="off">
+          <select id="task-kind" name="kind" aria-label="任务类型"></select>
+          <input id="task-brief" name="brief" maxlength="1000" placeholder="让它去查什么、做什么" aria-label="任务内容">
+          <button id="btn-task" class="btn" type="submit">派给它</button>
+        </form>
+        <p id="task-error" class="field-error" role="alert" hidden></p>
+        <ul id="tasks"></ul>
+      </section>
+
+      <details id="settings-panel" class="card" open>
+        <summary><h2>设置</h2></summary>
+        <form id="settings" autocomplete="off">
+          <label>名字<input id="set-name" name="name" maxlength="12"></label>
+          <div class="field"><span id="scene-label">场景</span><div id="set-scene" class="segmented" role="radiogroup" aria-labelledby="scene-label"></div></div>
+          <label>嗓音<select id="set-voice" name="voice"></select></label>
+          <label>语速<input id="set-speed" name="speed" type="range" min="0.8" max="1.5" step="0.05"></label>
+          <label>项目目录<input id="set-project" name="project_dir" placeholder="/Users/你/项目" spellcheck="false"></label>
+          <label>会议背景<textarea id="set-topic" name="topic" rows="3" placeholder="这场会要讨论什么、谁参加"></textarea></label>
+          <label class="check"><input id="set-skills" name="use_my_skills" type="checkbox">做设计时用我本机 Claude 的技能</label>
+          <p id="settings-error" class="field-error" role="alert" hidden></p>
+        </form>
+      </details>
+    </aside>
+  </main>
+</div>
+<script type="module" src="/static/console.js"></script>
+</body>
+</html>

@@ -30,7 +30,7 @@ class Settings:
     project_dir: str = ""        # 「查代码」「做设计」的工作目录
     topic: str = ""              # 会议背景，开会前告诉数字人
     fast_model: str = "claude-haiku-5-5"
-    slow_model: str = "claude-sonnet-5-5"   # 干活用的模型；留空 = 本机 Claude 的默认模型
+    slow_model: str = ""         # 干活用的模型；留空 = 本机 Claude 的默认模型（最稳）
     use_my_skills: bool = False  # 做设计时是否加载你本机 Claude 的技能和插件（更强但更慢）
     silence_nudge: float = 6.0   # 会场安静多少秒后提示数字人一次
     gap: float = 0.4             # 别人说完后至少等多久再开口

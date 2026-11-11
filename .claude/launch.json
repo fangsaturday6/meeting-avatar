@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "meeting-avatar",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "python", "-m", "avatar"],
+      "port": 8765
+    }
+  ]
+}

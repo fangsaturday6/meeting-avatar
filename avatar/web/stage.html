@@ -1,1 +1,46 @@
-<!doctype html><title>stage</title>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数字人</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="stylesheet" href="/static/avatar.css">
+<link rel="stylesheet" href="/static/stage.css">
+</head>
+<body>
+<main id="stage" data-status="off" data-board="off" data-working="0" data-hearing="0">
+  <section id="presence">
+    <div id="avatar"></div>
+    <div id="nameplate"><span id="bot-name"></span><span id="ai-tag">AI</span></div>
+    <div id="progress" hidden></div>
+  </section>
+
+  <section id="board" hidden>
+    <header id="board-head"><span id="board-kind"></span><span id="board-brief"></span></header>
+    <div id="board-body"></div>
+  </section>
+
+  <p id="caption" aria-live="polite"></p>
+
+  <div id="mic-alert" role="alert" hidden>
+    <span id="mic-alert-text"></span>
+    <button id="btn-mic-retry" type="button">重试</button>
+  </div>
+
+  <div id="gate" hidden>
+    <button id="stage-start" type="button">接通麦克风和扬声器</button>
+    <p id="gate-error" role="alert" hidden></p>
+  </div>
+
+  <button id="btn-devices" type="button" title="选择麦克风和扬声器" aria-label="选择麦克风和扬声器" hidden>
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+  </button>
+  <form id="devices" hidden>
+    <label>麦克风<select id="mic-select" name="mic"></select></label>
+    <label>扬声器<select id="speaker-select" name="speaker"></select></label>
+  </form>
+</main>
+<script type="module" src="/static/stage.js"></script>
+</body>
+</html>
