@@ -8,8 +8,8 @@ from dataclasses import asdict, dataclass, field
 from .config import Settings
 from .speakers import SpeakerBook
 
-# 数字人状态。off=未开会 listening=在听 thinking=在想 waiting=举手等空档 speaking=在说
-STATUSES = ("off", "listening", "thinking", "waiting", "speaking")
+# 数字人状态。off=未开会 starting=正在入会 listening=在听 thinking=在想 waiting=举手等空档 speaking=在说
+STATUSES = ("off", "starting", "listening", "thinking", "waiting", "speaking")
 
 
 @dataclass

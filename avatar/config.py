@@ -10,11 +10,13 @@ WORKSPACE = ROOT / "workspace"
 SETTINGS_FILE = WORKSPACE / "settings.json"
 DESIGN_DIR = WORKSPACE / "designs"
 
+# local = 本机合成，不联网，延迟最稳；其余是在线嗓音，更自然但依赖网络
 VOICES = {
-    "zh-CN-YunxiNeural": "云希（男，年轻）",
-    "zh-CN-YunjianNeural": "云健（男，沉稳）",
-    "zh-CN-XiaoxiaoNeural": "晓晓（女，亲切）",
-    "zh-CN-XiaoyiNeural": "晓伊（女，活泼）",
+    "local": "本地嗓音（不联网，最稳）",
+    "zh-CN-YunxiNeural": "在线·云希（男，年轻）",
+    "zh-CN-YunjianNeural": "在线·云健（男，沉稳）",
+    "zh-CN-XiaoxiaoNeural": "在线·晓晓（女，亲切）",
+    "zh-CN-XiaoyiNeural": "在线·晓伊（女，活泼）",
 }
 SCENES = {"room": "当面开会", "online": "线上会议"}
 
@@ -22,13 +24,14 @@ SCENES = {"room": "当面开会", "online": "线上会议"}
 @dataclass
 class Settings:
     name: str = "小克"
-    voice: str = "zh-CN-YunxiNeural"
-    rate: str = "+10%"
+    voice: str = "local"
+    speed: float = 1.1           # 语速，1.0 为正常
     scene: str = "room"
     project_dir: str = ""        # 「查代码」「做设计」的工作目录
     topic: str = ""              # 会议背景，开会前告诉数字人
     fast_model: str = "claude-haiku-5-5"
-    slow_model: str = ""         # 留空 = 用本机 Claude 的默认模型
+    slow_model: str = "claude-sonnet-5-5"   # 干活用的模型；留空 = 本机 Claude 的默认模型
+    use_my_skills: bool = False  # 做设计时是否加载你本机 Claude 的技能和插件（更强但更慢）
     silence_nudge: float = 6.0   # 会场安静多少秒后提示数字人一次
     gap: float = 0.4             # 别人说完后至少等多久再开口
     barge_delay: float = 0.35    # 别人持续说多久算打断
@@ -55,6 +58,8 @@ class Settings:
                 raise ValueError("项目目录不存在")
             if f.name == "name" and not new.strip():
                 raise ValueError("名字不能为空")
+            if f.name == "speed" and not 0.6 <= new <= 1.8:
+                raise ValueError("语速要在 0.6 到 1.8 之间")
             if new != cur:
                 setattr(self, f.name, new)
                 changed.append(f.name)

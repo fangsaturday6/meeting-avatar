@@ -77,7 +77,7 @@ class _Attempt:
 
 class Floor:
     hold_timeout = 12.0     # 举手最多等多久
-    task_timeout = 300.0    # 后台任务最长多久
+    task_timeout = 600.0    # 后台任务最长多久
     echo_threshold = 0.6
 
     def __init__(self, meeting: Meeting, brain: Brain, mouth: Mouth, player: Player,
@@ -109,7 +109,7 @@ class Floor:
         self.m.reset()
         self.pending.clear(); self.carry.clear(); self._direct.clear()
         self._nudge_ok = False
-        self.m.set_status("thinking")      # 大脑预热期间显示为「在想」
+        self.m.set_status("starting")      # 大脑预热要几秒
         try:
             await self.brain.start()
             self.m.set_flag("brain_ok", True)
@@ -149,10 +149,11 @@ class Floor:
             self._cancel(self._barge_task)
             self._barge_task = asyncio.create_task(self._barge_later())
 
-    def on_speech_end(self) -> None:
+    def on_speech_end(self, ago: float = 0.0) -> None:
+        """有人停下了。ago：实际是多少秒之前停的（断句本身要等一段静音才能确认）。"""
         if not self.m.active:
             return
-        self._last_speech_end = self.clock()
+        self._last_speech_end = self.clock() - ago
         self.m.set_flag("humans_speaking", False)
         self._speech_changed.set()
         self._cancel(self._barge_task)
