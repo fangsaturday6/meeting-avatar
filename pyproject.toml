@@ -1,0 +1,24 @@
+[project]
+name = "meeting-avatar"
+version = "0.1.0"
+description = "会议数字人：像同事一样参加当面会议和线上会议"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "numpy>=1.26",
+    "sherpa-onnx>=1.10.30",
+    "edge-tts>=6.1.12",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["live: 需要真实的 Claude、网络或模型，默认不跑"]
+addopts = "-m \"not live\""
