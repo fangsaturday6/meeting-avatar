@@ -160,3 +160,26 @@ def echo_score(heard: str, spoken: str) -> float:
         return 0.0
     blocks = SequenceMatcher(None, h, s).get_matching_blocks()
     return sum(b.size for b in blocks if b.size >= 2) / len(h)
+
+
+def fix_name(text: str, name: str) -> str:
+    """把语音识别写错的名字改回来：读音相同的字（小课、小柯、小可……）都当作在叫「小克」。"""
+    n = len(name)
+    if n < 2 or len(text) < n:
+        return text
+    try:
+        from pypinyin import lazy_pinyin
+    except ImportError:      # 没装拼音库就不纠正，不影响开会
+        return text
+    target = lazy_pinyin(name)
+    out, i = [], 0
+    while i < len(text):
+        win = text[i:i + n]
+        if len(win) == n and win != name and all("\u4e00" <= c <= "\u9fff" for c in win) and lazy_pinyin(win) == target:
+            out.append(name)
+            i += n
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+

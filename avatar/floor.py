@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Awaitable, Callable, Protocol
 
 from .meeting import Line, Meeting, Task
-from .textutil import TASK_KINDS, ReplyStream, SentenceSplitter, echo_score, similar
+from .textutil import TASK_KINDS, ReplyStream, SentenceSplitter, echo_score, fix_name, similar
 
 log = logging.getLogger("avatar.floor")
 
@@ -89,6 +89,7 @@ class Floor:
     stall_line_every = 45.0  # 这句话最多多久说一次
     give_up_after = 12.0    # 举手最多等多久；等不到就把话咽回去
     early_cut = 1.5         # 开口后这么短时间内就被打断，算「刚开口就被打断」
+    asr_grace = 0.35        # 别人刚说完时，等这么久让那句话的文字先到，免得抢答上一句
     first_token_timeout = 20.0
     start_timeout = 40.0    # 入会时大脑预热最多等多久
     task_timeout = 600.0    # 后台任务最长多久
@@ -111,6 +112,7 @@ class Floor:
         self._bg: set[asyncio.Task] = set()
         self._nudge_ok = False
         self._last_speech_end = -1e9
+        self._speech_end_at = -1e9     # 收到「人声结束」的时刻（此时那句话还在识别中）
         self._last_barge = -1e9
         self._overlap = False          # 当前这段人声开始时，数字人是否正在出声
         self._recent_bot: deque[tuple[float, str]] = deque(maxlen=12)
@@ -181,6 +183,7 @@ class Floor:
         if not self.m.active:
             return
         self._last_speech_end = self.clock() - ago
+        self._speech_end_at = self.clock()
         self.m.set_flag("humans_speaking", False)
         self._speech_changed.set()
         self._cancel(self._barge_task)
@@ -189,7 +192,7 @@ class Floor:
     async def on_utterance(self, text: str, embedding=None, speaker_name: str | None = None,
                            seconds: float = 10.0) -> Line | None:
         """有人说完了一句话。返回字幕行；被判为回声则返回 None。"""
-        text = text.strip()
+        text = fix_name(text.strip(), self.m.settings.name)
         if not self.m.active or not text:
             return None
         overlapped, self._overlap = self._overlap, False
@@ -451,6 +454,9 @@ class Floor:
             self._speech_changed.clear()
             if not self.m.humans_speaking:
                 remain = self.m.settings.gap - (self.clock() - self._last_speech_end)
+                if att.phase == "waiting":
+                    # 等的过程中有人说过话：那句话的文字还在识别，等它到了再决定（可能要重想）
+                    remain = max(remain, self.asr_grace - (self.clock() - self._speech_end_at))
                 if remain <= 0:
                     return
                 wait = remain

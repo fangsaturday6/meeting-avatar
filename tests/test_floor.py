@@ -381,3 +381,26 @@ async def test_network_trouble_stays_quiet_when_nobody_asked():
     await asyncio.sleep(0.1)
     assert player.played == []                              # 没人在等它，不用出声
     await floor.stop()
+
+
+async def test_waits_for_the_words_of_whoever_just_spoke_before_answering_stale_question():
+    m, brain, mouth, player, floor = await make(["你是叫我来帮忙的。", "好，要查什么？"])
+    await floor.on_utterance("我让你做啥", speaker_name="张三")
+    floor.on_speech_start()                      # 张三接着说
+    await settle(lambda: m.status == "waiting")
+    floor.on_speech_end(0.5)                     # 说完了，但这句话的文字还在识别
+    await asyncio.sleep(0.15)
+    assert player.played == []                   # 不抢答上一句
+    await floor.on_utterance("帮我查一下", speaker_name="张三")
+    await settle(lambda: player.played and m.status == "listening")
+    assert player.texts == ["好，要查什么？"]
+    await floor.stop()
+
+
+async def test_misheard_name_is_corrected_before_the_brain_sees_it():
+    m, brain, mouth, player, floor = await make(["在。"])
+    line = await floor.on_utterance("小课你在吗", speaker_name="张三")
+    assert line.text == "小克你在吗"
+    await settle(lambda: brain.prompts)
+    assert "小克你在吗" in brain.prompts[0]
+    await floor.stop()
