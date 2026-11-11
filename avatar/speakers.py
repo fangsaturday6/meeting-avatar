@@ -75,6 +75,13 @@ class SpeakerBook:
         self.last_id = best.id
         return best.id
 
+    def similarity(self, speaker_id: int, embedding: np.ndarray) -> float:
+        """一段声音和某位说话人有多像（不改动任何记录）。没有声纹可比时返回 -1。"""
+        sp = self.speakers.get(speaker_id)
+        if sp is None or sp.centroid is None or embedding is None or len(embedding) == 0:
+            return -1.0
+        return float(np.dot(sp.centroid, _unit(embedding)))
+
     def by_name(self, name: str) -> int:
         """按名字取说话人（文字注入用），没有就新建。"""
         for sp in self.speakers.values():

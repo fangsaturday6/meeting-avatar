@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Callable, Protocol
+from typing import AsyncIterator, Awaitable, Callable, Protocol
 
 from .meeting import Line, Meeting, Task
 from .textutil import TASK_KINDS, ReplyStream, SentenceSplitter, echo_score, similar
@@ -66,6 +67,9 @@ class _Attempt:
     aborted: str = ""
     done: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task | None = None
+    trigger_speaker: int | None = None  # 是谁的话引出了这次发言；None = 没人问，是它自己想说
+    push: bool = False                  # 顶着说：周围一直有声音，不再因为有人声就停，只认「停一下」和按钮
+    speak_started: float = 0.0
 
     def spoken(self) -> list[str]:
         return [self.clips[c] for c in self.order if c in self.started]
@@ -75,8 +79,14 @@ class _Attempt:
         return any(c not in self.ended for c in self.started)
 
 
+# 顶着说的时候，听到这些词（或自己的名字）才停
+_STOP_WORDS = re.compile(r"停一下|停一停|停下|等一下|等等|等会|别说了|先别说|不要说了|闭嘴|安静|打住")
+
+
 class Floor:
-    hold_timeout = 12.0     # 举手最多等多久
+    give_up_after = 12.0    # 举手最多等多久；等不到就把话咽回去
+    early_cut = 1.5         # 开口后这么短时间内就被打断，算「刚开口就被打断」
+    first_token_timeout = 20.0
     task_timeout = 600.0    # 后台任务最长多久
     echo_threshold = 0.6
 
@@ -101,6 +111,11 @@ class Floor:
         self._overlap = False          # 当前这段人声开始时，数字人是否正在出声
         self._recent_bot: deque[tuple[float, str]] = deque(maxlen=12)
         self._clip_seq = 0
+        self._pending_sid: int | None = None   # pending 里最近一句话是谁说的
+        self._restarts = 0             # 连续几次「刚想好又被新的话打回去重想」
+        self._early_cuts = 0           # 连续几次「刚开口就被打断」
+        # 可选：问「现在正在说话的是谁」，返回声纹向量或 None。由耳朵提供
+        self.voice_probe: Callable[[], Awaitable[object]] | None = None
 
     # ================= 生命周期 =================
     async def start(self) -> None:
@@ -109,6 +124,7 @@ class Floor:
         self.m.reset()
         self.pending.clear(); self.carry.clear(); self._direct.clear()
         self._nudge_ok = False
+        self._pending_sid, self._restarts, self._early_cuts = None, 0, 0
         self.m.set_status("starting")      # 大脑预热要几秒
         try:
             await self.brain.start()
@@ -145,7 +161,7 @@ class Floor:
         self.m.set_flag("humans_speaking", True)
         self._speech_changed.set()
         self._cancel(self._nudge_task)
-        if att and att.phase == "speaking":
+        if att and att.phase == "speaking" and not att.push:
             self._cancel(self._barge_task)
             self._barge_task = asyncio.create_task(self._barge_later())
 
@@ -178,10 +194,21 @@ class Floor:
         line = self.m.add_line("human", text, sid)
         self._nudge_ok = True
         self.pending.append(f"[{line.speaker}] {text}")
+        self._pending_sid = sid
 
         att = self._attempt
-        if att and att.phase in ("thinking", "waiting"):
-            await self._abort("new_speech")
+        if att and not att.aborted:
+            if att.phase == "speaking":
+                # 顶着说的时候不看人声，只认明确的「停一下」或叫它名字
+                if att.push and self._wants_stop(text):
+                    self._last_barge = self.clock()
+                    await self._abort("barge")
+            else:
+                # 还没开口。问它的人接着说了：带上新内容重想。
+                # 换了别人在说：如果已经想好要说什么就不改口（否则旁边一直有人说话它就永远开不了口）
+                asker = att.trigger_speaker is None or sid == att.trigger_speaker
+                if asker or (not att.planned and self._restarts < 2):
+                    await self._abort("new_speech")
         self._wake.set()
         if not self.m.humans_speaking:
             self._arm_nudge()
@@ -244,10 +271,15 @@ class Floor:
             self._wake.clear()
             while self.m.active and not self.m.muted and (self._direct or self.pending):
                 att = _Attempt()
+                if self._early_cuts >= 2:
+                    # 连着两次刚开口就被打断：多半是环境声或回声，这次顶着说完
+                    att.push, self._early_cuts = True, 0
+                    log.info("连续两次刚开口就被打断，这次顶着说")
                 if self._direct:
                     coro = self._speak_fixed(att, self._direct.pop(0))
                 else:
                     att.prompt = "\n".join(self.carry + self.pending)
+                    att.trigger_speaker, self._pending_sid = self._pending_sid, None
                     self.carry.clear(); self.pending.clear()
                     coro = self._think_and_speak(att)
                 self._attempt = att
@@ -255,6 +287,10 @@ class Floor:
                 await asyncio.wait({att.task})
                 if self._attempt is att:
                     self._attempt = None
+                if not att.aborted:
+                    self._restarts = 0
+                    if att.order:
+                        self._early_cuts = 0
                 if not att.task.cancelled() and att.task.exception():
                     log.error("发言出错", exc_info=att.task.exception())
             if self.m.active:
@@ -267,20 +303,37 @@ class Floor:
         queue: asyncio.Queue = asyncio.Queue()
         speaker = asyncio.create_task(self._speak(att, queue))
         reply = None
+        t0, first = self.clock(), None
         try:
             stream = await self.brain.ask(att.prompt)
             att.sent = True
-            async for delta in stream:
+            it = stream.__aiter__()
+            while True:
+                try:
+                    # 只给第一个字设时限：网络卡住时别让它一直「在想」
+                    delta = await (asyncio.wait_for(it.__anext__(), self.first_token_timeout)
+                                   if first is None else it.__anext__())
+                except StopAsyncIteration:
+                    break
+                first = first if first is not None else self.clock() - t0
                 for s in rs.feed(delta):
                     self._plan(att, queue, s)
             rest, reply = rs.finish()
             for s in rest:
                 self._plan(att, queue, s)
             self.m.set_flag("brain_ok", True)
+            log.info("大脑 首字%.1fs 共%.1fs｜听到：%s｜回答：%s", first or 0, self.clock() - t0,
+                     att.prompt[-70:].replace("\n", " / "), rs.raw.strip()[:70].replace("\n", " ") or "（空）")
         except asyncio.CancelledError:
+            log.info("大脑 被叫停（%s）｜听到：%s｜已想到：%s", att.aborted or "会议结束",
+                     att.prompt[-70:].replace("\n", " / "), rs.raw.strip()[:50].replace("\n", " ") or "（还没想出来）")
             speaker.cancel()
             self._cancel(*att.synths)
             raise
+        except asyncio.TimeoutError:
+            log.warning("大脑 %.0f 秒没有回应，放弃这一轮", self.first_token_timeout)
+            self.m.set_flag("brain_ok", False)
+            await self._safely(self.brain.cancel())
         except Exception:  # noqa: BLE001
             log.exception("大脑出错")
             self.m.set_flag("brain_ok", False)
@@ -342,6 +395,7 @@ class Floor:
             if att.phase != "speaking":
                 await self._wait_for_floor(att)
                 att.phase = "speaking"
+                att.speak_started = self.clock()
                 self.m.set_status("speaking")
             self._clip_seq += 1
             cid = self._clip_seq
@@ -361,7 +415,15 @@ class Floor:
                 self.on_clip_started(cid)
 
     async def _wait_for_floor(self, att: _Attempt) -> None:
-        deadline = self.clock() + self.hold_timeout
+        """等一个开口的空档。
+
+        没人问、是它自己想说的话：一直礼貌地等，等不到就算了。
+        有人问它的话：等 hold 秒；到时候如果是问它的人自己还在说，就继续等；
+        如果是别的声音（旁人闲聊、电视）一直不停，就顶着说——否则环境一吵它就永远答不了话。
+        """
+        polite = att.trigger_speaker is None
+        start = self.clock()
+        limit = self.give_up_after if polite else min(self.m.settings.hold, self.give_up_after)
         while True:
             self._speech_changed.clear()
             if not self.m.humans_speaking:
@@ -372,14 +434,34 @@ class Floor:
             else:
                 att.phase = "waiting"
                 self.m.set_status("waiting")
-                wait = deadline - self.clock()
+                wait = start + limit - self.clock()
                 if wait <= 0:
-                    raise _GiveUp
+                    if polite or limit >= self.give_up_after:
+                        log.info("等了 %.0f 秒都没有空档，这句话不说了", limit)
+                        raise _GiveUp
+                    if await self._asker_still_talking(att):
+                        limit = self.give_up_after
+                        continue
+                    att.push = True
+                    log.info("等了 %.1f 秒旁边的声音还没停，顶着说", limit)
+                    return
             try:
                 await asyncio.wait_for(self._speech_changed.wait(), wait)
             except asyncio.TimeoutError:
-                if self.m.humans_speaking:
-                    raise _GiveUp from None
+                pass
+
+    async def _asker_still_talking(self, att: _Attempt) -> bool:
+        """现在正在说话的，是不是刚才问它的那个人。分辨不出来时当作不是。"""
+        if self.voice_probe is None or att.trigger_speaker is None:
+            return False
+        try:
+            emb = await self.voice_probe()
+        except Exception:  # noqa: BLE001
+            log.exception("分辨说话人失败")
+            return False
+        if emb is None:
+            return False
+        return self.m.speakers.similarity(att.trigger_speaker, emb) >= self.m.speakers.threshold
 
     def _check_done(self, att: _Attempt) -> None:
         if att.all_sent and all(c in att.ended for c in att.order):
@@ -393,8 +475,15 @@ class Floor:
         att.aborted = reason
         phase, spoken = att.phase, att.spoken()
         att.task.cancel()
+        if reason == "new_speech":
+            self._restarts += 1
+        elif reason == "barge":
+            early = self.clock() - att.speak_started < self.early_cut
+            self._early_cuts = self._early_cuts + 1 if early else 0
         if not att.sent and att.prompt:
             self.pending.insert(0, att.prompt)   # 还没送进大脑，放回去下次一起送
+            if self._pending_sid is None:
+                self._pending_sid = att.trigger_speaker
         else:
             await self._safely(self.brain.cancel())
         if att.clips:
@@ -412,11 +501,19 @@ class Floor:
             self.carry.append("（你刚才想说的话还没出口，又有人说话了。请结合下面的新内容重新判断该不该说、说什么。）")
 
     async def _barge_later(self) -> None:
-        await asyncio.sleep(self.m.settings.barge_delay)
+        st = self.m.settings
         att = self._attempt
-        if self.m.humans_speaking and att and att.phase == "speaking":
+        # 刚开口的头一小段不算打断：回声消除需要一点时间才稳定，这时最容易被自己的声音误触发
+        grace = max(0.0, st.barge_grace - (self.clock() - att.speak_started)) if att else 0.0
+        await asyncio.sleep(st.barge_delay + grace)
+        att = self._attempt
+        if self.m.humans_speaking and att and att.phase == "speaking" and not att.push:
             self._last_barge = self.clock()
+            log.info("被打断：说到「%s」", "".join(att.spoken())[-20:])
             await self._abort("barge")
+
+    def _wants_stop(self, text: str) -> bool:
+        return self.m.settings.name in text or bool(_STOP_WORDS.search(text))
 
     def _is_echo(self, text: str) -> bool:
         now = self.clock()

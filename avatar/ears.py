@@ -22,6 +22,7 @@ SAMPLE_RATE = 16000
 class Ears:
     min_silence = 0.5      # 停顿多久算一句话说完
     min_embed_seconds = 1.0  # 短于这个长度的片段声纹不可靠，不提取
+    live_windows = 190       # 中途分辨说话人时最多看最近约 6 秒
 
     def __init__(
         self,
@@ -40,6 +41,7 @@ class Ears:
         self._window = 512
         self._buf = np.zeros(0, dtype=np.float32)
         self._speaking = False
+        self._live: list[np.ndarray] = []   # 当前这段人声到目前为止的采样（用来中途分辨是谁在说）
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ears")
         self._results: asyncio.Queue | None = None
         self._consumer: asyncio.Task | None = None
@@ -88,9 +90,16 @@ class Ears:
         self._buf = np.concatenate([self._buf, samples])
         w = self._window
         while len(self._buf) >= w:
-            self._vad.accept_waveform(self._buf[:w])
+            win = self._buf[:w]
+            self._vad.accept_waveform(win)
             self._buf = self._buf[w:]
             speaking = self._vad.is_speech_detected()
+            if speaking:
+                if not self._speaking:
+                    self._live = []
+                self._live.append(win)
+                if len(self._live) > self.live_windows:
+                    del self._live[: len(self._live) - self.live_windows]
             if speaking and not self._speaking:
                 self._speaking = True
                 self.on_speech_start()
@@ -126,11 +135,23 @@ class Ears:
             return "", None, seconds
         emb = None
         if self._spk is not None and len(samples) >= SAMPLE_RATE * self.min_embed_seconds:
-            s = self._spk.create_stream()
-            s.accept_waveform(SAMPLE_RATE, samples)
-            s.input_finished()
-            emb = np.asarray(self._spk.compute(s), dtype=np.float32)
+            emb = self._embed(samples)
         return text, emb, seconds
+
+    async def who(self) -> np.ndarray | None:
+        """现在正在说话的人的声纹。没人在说、说得太短或没有声纹模型时返回 None。"""
+        if self._spk is None or not self._speaking:
+            return None
+        samples = np.concatenate(self._live) if self._live else np.zeros(0, dtype=np.float32)
+        if len(samples) < SAMPLE_RATE * 1.2:
+            return None
+        return await asyncio.get_running_loop().run_in_executor(self._pool, self._embed, samples)
+
+    def _embed(self, samples: np.ndarray) -> np.ndarray:
+        s = self._spk.create_stream()
+        s.accept_waveform(SAMPLE_RATE, samples)
+        s.input_finished()
+        return np.asarray(self._spk.compute(s), dtype=np.float32)
 
     def close(self) -> None:
         if self._consumer:

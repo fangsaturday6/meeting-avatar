@@ -20,6 +20,8 @@ async def make(replies=(), auto=True, brain_delay=0.0, worker=None, nudge=0.0):
     m = Meeting()
     m.settings.gap = 0.05
     m.settings.barge_delay = 0.05
+    m.settings.barge_grace = 0.0
+    m.settings.hold = 0.15
     m.settings.silence_nudge = nudge
     brain, mouth, player = FakeBrain(replies, brain_delay), FakeMouth(), FakePlayer(auto)
     floor = Floor(m, brain, mouth, player, worker)
@@ -244,3 +246,110 @@ async def test_stop_fails_running_tasks():
     await asyncio.sleep(0.01)
     await floor.stop()
     assert m.tasks[0].status == "failed" and not brain.started
+
+
+# ---------- 嘈杂环境：旁边一直有别的声音 ----------
+
+async def test_asked_but_background_never_stops_speaks_up_and_ignores_noise():
+    m, brain, mouth, player, floor = await make(["我在，请说。"], auto=False)
+    await floor.on_utterance("小克你在吗", speaker_name="张三")
+    floor.on_speech_start()                      # 电视声音一直不停
+    await settle(lambda: m.status == "waiting")
+    await settle(lambda: m.status == "speaking")  # 等了 hold 秒，顶着说
+    assert player.texts[0] == "我在，请说。"
+    floor.on_speech_end(); floor.on_speech_start()   # 电视又响了：不算打断
+    await asyncio.sleep(0.2)
+    assert player.stops == 0 and m.status == "speaking"
+    floor.on_speech_end()
+    await floor.on_utterance("贵妃娘娘驾到", speaker_name="电视")   # 无关的话也不打断
+    assert player.stops == 0
+    await floor.on_utterance("小克停一下", speaker_name="张三")     # 叫名字或说停一下才停
+    await settle(lambda: player.stops == 1 and m.status != "speaking")
+    await floor.stop()
+
+
+async def test_asker_still_talking_keeps_waiting_instead_of_talking_over():
+    m, brain, mouth, player, floor = await make(["在的。", "好的，登录先做。"])
+    probes = []
+
+    async def probe():
+        probes.append(1)
+        return [1.0, 0.0]
+
+    floor.voice_probe = probe
+    line = await floor.on_utterance("小克，", speaker_name="张三")
+    import numpy as np
+    m.speakers.speakers[line.speaker_id].centroid = np.array([1.0, 0.0], dtype=np.float32)
+    floor.on_speech_start()                      # 张三自己还在接着说
+    await settle(lambda: probes)
+    await asyncio.sleep(0.3)                     # 早过了 hold，但没有顶着说
+    assert player.played == [] and m.status == "waiting"
+    floor.on_speech_end()
+    await floor.on_utterance("登录先做还是支付先做", speaker_name="张三")
+    await settle(lambda: player.played and m.status == "listening")
+    assert player.texts[0] == "好的，登录先做。"
+    await floor.stop()
+
+
+async def test_other_speaker_does_not_make_it_swallow_a_ready_answer():
+    m, brain, mouth, player, floor = await make(["先做登录。", "[静]"])
+    await floor.on_utterance("小克先做什么", speaker_name="张三")
+    floor.on_speech_start()
+    await settle(lambda: m.status == "waiting")   # 已经想好了，在等空档
+    floor.on_speech_end()
+    await floor.on_utterance("皇后娘娘", speaker_name="电视")       # 别人插了一句无关的话
+    await settle(lambda: player.played)
+    assert player.texts == ["先做登录。"] and brain.cancels == 0
+    await floor.stop()
+
+
+async def test_unprompted_remark_stays_polite_and_gives_up():
+    m, brain, mouth, player, floor = await make(["[静]", "我补充一点。"], nudge=0.05, brain_delay=0.05)
+    floor.give_up_after = 0.2
+    await floor.on_utterance("就这样吧", speaker_name="张三")
+    await settle(lambda: len(brain.prompts) == 2)   # 冷场提示引出的发言：没人问它
+    floor.on_speech_start()
+    await settle(lambda: m.status == "waiting")
+    await settle(lambda: m.status == "listening")
+    assert player.played == []                     # 一直有人说话：不抢话，咽回去
+    assert any("没找到机会" in c for c in floor.carry)
+    await floor.stop()
+
+
+async def test_two_early_cuts_then_pushes_through():
+    m, brain, mouth, player, floor = await make(["我是小克。", "我是小克。", "我是小克，有什么事？"], auto=False)
+    for i in range(2):
+        await floor.on_utterance("小克你好" if i == 0 else "你说呀", speaker_name="张三")
+        await settle(lambda: m.status == "speaking")
+        floor.on_speech_start()                    # 刚开口就被环境声打断
+        await settle(lambda: player.stops == i + 1 and m.status == "listening")
+        floor.on_speech_end()
+    await floor.on_utterance("你说呀", speaker_name="张三")
+    await settle(lambda: m.status == "speaking")
+    floor.on_speech_start()
+    await asyncio.sleep(0.2)
+    assert player.stops == 2 and m.status == "speaking"    # 第三次顶着说，不再被打断
+    await floor.stop()
+
+
+async def test_grace_period_ignores_blip_right_after_it_starts_speaking():
+    m, brain, mouth, player, floor = await make(["我来说一下方案。"], auto=False)
+    m.settings.barge_grace = 0.3
+    await floor.on_utterance("小克讲讲", speaker_name="张三")
+    await settle(lambda: m.status == "speaking")
+    floor.on_speech_start()                        # 刚开口 0 秒就有声音（多半是自己的回声）
+    await asyncio.sleep(0.15)
+    assert player.stops == 0                       # 0.05 的打断阈值早过了，但还在保护期
+    floor.on_speech_end()
+    await asyncio.sleep(0.3)
+    assert player.stops == 0 and m.status == "speaking"
+    await floor.stop()
+
+
+async def test_brain_that_never_answers_is_dropped_after_timeout():
+    m, brain, mouth, player, floor = await make(["永远等不到"], brain_delay=5)
+    floor.first_token_timeout = 0.1
+    await floor.on_utterance("小克", speaker_name="张三")
+    await settle(lambda: not m.brain_ok and m.status == "listening")
+    assert brain.cancels == 1 and player.played == []
+    await floor.stop()

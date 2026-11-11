@@ -70,6 +70,7 @@ class Hub:
         self.floor = Floor(self.meeting, self.brain, self.mouth, self.player, self.worker)
         self.player.floor = self.floor
         self.ears = Ears(self.floor.on_speech_start, self.floor.on_speech_end, self.floor.on_utterance)
+        self.floor.voice_probe = self.ears.who
         self.ready = {"ears": False, "speakers": False, "local_voice": False}
 
     def _recap(self) -> str:
