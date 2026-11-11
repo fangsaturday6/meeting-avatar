@@ -372,7 +372,11 @@ class Floor:
         self.m.set_flag("brain_ok", False)
         att = self._attempt
         now = self.clock()
-        if (att and att.queue is not None and att.trigger_speaker is not None and not att.aborted
+        # 只在确实有人在等它时才出声：被叫了名字，或者半分钟内它刚说过话（正在对话中）。
+        # 否则背景里随便一句话都会引出一句「我网络卡了」
+        in_talk = any(now - ts < 30 for ts, _ in self._recent_bot)
+        wanted = att is not None and (self.m.settings.name in att.prompt or in_talk)
+        if (att and wanted and att.queue is not None and att.trigger_speaker is not None and not att.aborted
                 and not att.planned and now - self._last_stall_line > self.stall_line_every):
             self._last_stall_line = now
             self._plan(att, att.queue, self.stall_line)

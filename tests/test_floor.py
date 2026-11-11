@@ -404,3 +404,13 @@ async def test_misheard_name_is_corrected_before_the_brain_sees_it():
     await settle(lambda: brain.prompts)
     assert "小克你在吗" in brain.prompts[0]
     await floor.stop()
+
+
+async def test_network_trouble_stays_quiet_for_background_chatter():
+    m, brain, mouth, player, floor = await make(["[静]"], brain_delay=0.02)
+    brain.retries_before_reply = 2
+    await floor.on_utterance("贵妃娘娘驾到", speaker_name="电视")   # 没叫它，它也没在对话中
+    await settle(lambda: brain.prompts and m.status == "listening")
+    await asyncio.sleep(0.1)
+    assert player.played == []
+    await floor.stop()
