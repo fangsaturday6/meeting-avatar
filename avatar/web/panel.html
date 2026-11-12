@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设置</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="stylesheet" href="/static/panel.css">
+</head>
+<body>
+<div id="panel" data-status="off" data-tab="settings">
+  <nav id="tabs" class="segmented" role="tablist">
+    <button id="tab-notes" type="button" role="tab" aria-controls="notes" data-tab="notes">记录</button>
+    <button id="tab-settings" type="button" role="tab" aria-controls="settings" data-tab="settings">设置</button>
+  </nav>
+  <ul id="alerts" class="alerts" hidden></ul>
+
+  <section id="notes" role="tabpanel" aria-labelledby="tab-notes">
+    <ul id="tasks"></ul>
+    <ol id="transcript" aria-live="polite"></ol>
+    <form id="composer" autocomplete="off">
+      <select id="say-kind" name="kind" aria-label="说话，或者派一个后台任务"></select>
+      <input id="say-text" name="text" maxlength="2000" placeholder="打字" aria-label="内容">
+      <button id="btn-send" class="icon-btn" type="submit" data-icon="send" aria-label="发送" title="发送"></button>
+    </form>
+    <p id="composer-error" class="field-error" role="alert" hidden></p>
+  </section>
+
+  <form id="settings" role="tabpanel" aria-labelledby="tab-settings" autocomplete="off">
+    <label>会议背景<textarea id="set-topic" name="topic" rows="3" placeholder="这场会要讨论什么、谁参加"></textarea></label>
+    <div class="field"><span id="scene-label">场景</span><div id="set-scene" class="segmented" role="radiogroup" aria-labelledby="scene-label"></div></div>
+    <label>项目目录<input id="set-project" name="project_dir" placeholder="/Users/你/项目" spellcheck="false"></label>
+    <hr>
+    <label>名字<input id="set-name" name="name" maxlength="12"></label>
+    <label>嗓音<select id="set-voice" name="voice"></select></label>
+    <label>语速<input id="set-speed" name="speed" type="range" min="0.8" max="1.5" step="0.05"></label>
+    <label class="check"><input id="set-skills" name="use_my_skills" type="checkbox">做设计时用我本机 Claude 的技能</label>
+    <hr>
+    <label>麦克风<select id="mic-select"></select></label>
+    <label>扬声器<select id="speaker-select"></select></label>
+    <label>打字时我的名字<input id="say-as" maxlength="30"></label>
+    <p id="settings-error" class="field-error" role="alert" hidden></p>
+  </form>
+</div>
+<script type="module" src="/static/panel.js"></script>
+</body>
+</html>

@@ -19,7 +19,7 @@ def main() -> None:
     fh = logging.FileHandler(WORKSPACE / "meeting.log", encoding="utf-8")
     fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
     logging.getLogger("avatar").addHandler(fh)
-    print(f"\n  控制台  http://{args.host}:{args.port}/\n  形象页  http://{args.host}:{args.port}/stage\n")
+    print(f"\n  主窗口  http://{args.host}:{args.port}/\n  设置    http://{args.host}:{args.port}/panel\n")
     uvicorn.run(create_app(), host=args.host, port=args.port, log_level="warning")
 
 

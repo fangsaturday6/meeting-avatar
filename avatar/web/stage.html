@@ -7,39 +7,34 @@
 <link rel="stylesheet" href="/static/common.css">
 <link rel="stylesheet" href="/static/avatar.css">
 <link rel="stylesheet" href="/static/stage.css">
+<script type="importmap">{ "imports": { "three": "/static/vendor/three/three.module.js" } }</script>
 </head>
 <body>
-<main id="stage" data-status="off" data-board="off" data-working="0" data-hearing="0">
-  <section id="presence">
-    <div id="avatar"></div>
-    <div id="nameplate"><span id="bot-name"></span><span id="ai-tag">AI</span></div>
-    <div id="progress" hidden></div>
-  </section>
+<main id="stage" data-status="off" data-board="off" data-working="0" data-hearing="0" data-muted="0" data-dock="show">
+  <section id="presence"><div id="avatar"></div></section>
+  <p id="status-text" class="sr-only" aria-live="polite"></p>
 
   <section id="board" hidden>
-    <header id="board-head"><span id="board-kind"></span><span id="board-brief"></span></header>
+    <header id="board-head">
+      <span id="board-kind"></span><span id="board-brief"></span>
+      <a id="board-open" class="icon-btn" data-icon="open" target="_blank" rel="noopener" aria-label="单独打开设计稿" title="单独打开" hidden></a>
+      <button id="btn-board-close" class="icon-btn" type="button" data-icon="close" aria-label="收起资料板" title="收起"></button>
+    </header>
     <div id="board-body"></div>
   </section>
 
   <p id="caption" aria-live="polite"></p>
+  <ul id="alerts" class="alerts" hidden></ul>
 
-  <div id="mic-alert" role="alert" hidden>
-    <span id="mic-alert-text"></span>
-    <button id="btn-mic-retry" type="button">重试</button>
-  </div>
-
-  <div id="gate" hidden>
-    <button id="stage-start" type="button">接通麦克风和扬声器</button>
-    <p id="gate-error" role="alert" hidden></p>
-  </div>
-
-  <button id="btn-devices" type="button" title="选择麦克风和扬声器" aria-label="选择麦克风和扬声器" hidden>
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-  </button>
-  <form id="devices" hidden>
-    <label>麦克风<select id="mic-select" name="mic"></select></label>
-    <label>扬声器<select id="speaker-select" name="speaker"></select></label>
-  </form>
+  <nav id="dock" aria-label="会议控制">
+    <button id="btn-start" type="button">开始</button>
+    <button id="btn-mute" class="icon-btn" type="button" data-icon="mute" aria-label="静音" title="静音" aria-pressed="false" hidden></button>
+    <button id="btn-hush" class="icon-btn" type="button" data-icon="hush" aria-label="让它停下" title="让它停下" hidden></button>
+    <button id="btn-stop" class="icon-btn danger" type="button" data-icon="stop" aria-label="结束会议" title="结束会议" hidden></button>
+    <span id="dock-gap" hidden></span>
+    <button id="btn-notes" class="icon-btn" type="button" data-icon="notes" aria-label="会议记录" title="会议记录" hidden></button>
+    <button id="btn-settings" class="icon-btn" type="button" data-icon="settings" aria-label="设置" title="设置"></button>
+  </nav>
 </main>
 <script type="module" src="/static/stage.js"></script>
 </body>

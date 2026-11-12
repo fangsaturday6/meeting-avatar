@@ -1,20 +1,21 @@
-/* 两个页面共用的颜色和基础样式。状态一律用颜色表达：
-   聆听=青  思考=紫  举手=琥珀  说话=橙红  未开会=灰 */
+/* 两个窗口共用的颜色和基础样式。
+   底色、文字、按钮只用黑白灰；颜色只留给状态和报错：
+   在听=青  在想=紫  想发言=琥珀  在说=橙红  未开会=灰 */
 :root {
-  --bg: #f5f4f0; --panel: #ffffff; --ink: #1b1a18; --ink2: #6d6a63; --ink3: #a09c93;
-  --line: #e6e3dc; --hover: #efede8;
-  --listening: #0e9f8e; --thinking: #7a5cf0; --waiting: #dd930a; --speaking: #ec5a35;
-  --off: #a8a49b; --starting: #a8a49b; --danger: #d23f3f; --ok: #2f9e55;
-  --radius: 14px;
+  --bg: #f4f3f1; --panel: #ffffff; --ink: #17171a; --ink2: #63636b; --ink3: #9b9ba3;
+  --line: #e4e3e0; --hover: #ecebe8; --glass: rgba(255, 255, 255, .72);
+  --listening: #0c9c8c; --thinking: #7558ee; --waiting: #d98d06; --speaking: #e9552f;
+  --off: #8d8d96; --starting: #8d8d96; --danger: #cf3a3a; --ok: #2c9a52;
+  --radius: 12px;
   --font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #131312; --panel: #1d1c1a; --ink: #f2f0ea; --ink2: #a29e94; --ink3: #6f6c65;
-    --line: #2d2b28; --hover: #262522;
-    --listening: #2cc4b1; --thinking: #9a83ff; --waiting: #f0b03a; --speaking: #ff7a55;
-    --off: #6a675f; --starting: #6a675f; --danger: #ef6a6a; --ok: #52c47c;
+    --bg: #0f1012; --panel: #191a1d; --ink: #f1f1f3; --ink2: #a1a1aa; --ink3: #6c6c75;
+    --line: #2a2b30; --hover: #24252a; --glass: rgba(30, 31, 35, .72);
+    --listening: #2ccab6; --thinking: #9d87ff; --waiting: #f2b23c; --speaking: #ff7b56;
+    --off: #6f6f78; --starting: #6f6f78; --danger: #f06c6c; --ok: #52c47c;
   }
 }
 * { box-sizing: border-box; }
@@ -23,6 +24,8 @@ body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--font); -we
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 [hidden] { display: none !important; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 [data-status="off"] { --tone: var(--off); }
 [data-status="starting"] { --tone: var(--starting); }
@@ -30,6 +33,22 @@ button { cursor: pointer; }
 [data-status="thinking"] { --tone: var(--thinking); }
 [data-status="waiting"] { --tone: var(--waiting); }
 [data-status="speaking"] { --tone: var(--speaking); }
+
+/* 图标按钮：圆形，名字写在 aria-label 和 title 里 */
+.icon-btn { width: 40px; height: 40px; flex: none; border-radius: 50%; border: 0; background: transparent; color: var(--ink); display: grid; place-items: center; transition: background .15s; }
+.icon-btn:hover { background: var(--hover); }
+.icon-btn:disabled { opacity: .35; cursor: default; background: transparent; }
+.icon-btn[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.icon-btn.danger { color: var(--danger); }
+.icon-btn svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* 异常提示：有问题才出现 */
+.alerts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; justify-items: center; }
+.alerts li { display: flex; align-items: center; gap: 10px; max-width: 100%; font-size: 13.5px; padding: 7px 14px; border-radius: 999px; color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--panel)); }
+.alerts li[data-level="info"] { color: var(--ink2); background: var(--panel); border: 1px solid var(--line); }
+.alerts button { border: 0; border-radius: 999px; padding: 2px 11px; background: var(--danger); color: #fff; font-size: 13px; flex: none; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* 资料板里的排版 */
 .md { font-size: 1em; line-height: 1.65; overflow-wrap: anywhere; }
@@ -40,6 +59,5 @@ button { cursor: pointer; }
 .md code { background: var(--hover); border-radius: 5px; padding: .08em .35em; font: .9em ui-monospace, Menlo, monospace; }
 .md pre { background: var(--hover); border-radius: 10px; padding: .8em 1em; overflow: auto; }
 .md pre code { background: none; padding: 0; }
-.md a { color: var(--listening); text-decoration: none; }
-.md a:hover { text-decoration: underline; }
+.md a { color: inherit; }
 .md > :first-child { margin-top: 0; }

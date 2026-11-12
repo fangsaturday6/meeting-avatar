@@ -1,4 +1,4 @@
-// 形象页的耳朵和嘴：采集麦克风送给后台，接收语音片段按顺序播放。
+// 主窗口的耳朵和嘴：采集麦克风送给后台，接收语音片段按顺序播放。
 // 收音和播放都在浏览器里，是为了用浏览器自带的回声消除（当面开会时数字人不会听到自己）。
 
 export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink }) {
@@ -139,15 +139,28 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink }) {
   return {
     // 先接通扬声器和后台，再接麦克风：麦克风拿不到时数字人仍然能说话（抛出的错误由页面提示）
     async start({ scene, micId, speakerId }) {
-      await setupOutput(speakerId);
+      // 没有点击就启动时（?autostart=1），浏览器可能不让先出声；麦克风开始采集后就允许了，所以失败时放到后面重试
+      let outputError = null;
+      try { await setupOutput(speakerId); } catch (e) { outputError = e; }
       wantOpen = true; replaced = false;
       if (!ws || ws.readyState > 1) openSocket();
       await setupMic(scene, micId);
+      if (outputError) await setupOutput(speakerId);
     },
     async reconfigure({ scene, micId, speakerId }) {
       if (!wantOpen) return;
       await setupOutput(speakerId);
       await setupMic(scene, micId);
+    },
+    // 会议结束后松开麦克风和音频通道，系统的麦克风指示灯随之熄灭
+    stop() {
+      wantOpen = false;
+      clearTimeout(retry);
+      stopPlayback();
+      stopMic();
+      onMicLevel(0);
+      if (ws) { ws.onclose = null; ws.close(); ws = null; }
+      onLink('idle');
     },
     get running() { return wantOpen && !replaced; },
   };

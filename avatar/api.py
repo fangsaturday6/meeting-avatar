@@ -27,6 +27,18 @@ log = logging.getLogger("avatar.api")
 WEB = Path(__file__).parent / "web"
 
 
+NO_CACHE = {"Cache-Control": "no-cache"}
+
+
+class FreshStatic(StaticFiles):
+    """界面文件每次都向后台确认是不是最新的：更新之后不会出现新页面配旧脚本。"""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers.update(NO_CACHE)
+        return response
+
+
 class StagePlayer:
     """把语音片段送到形象页播放。没有形象页连着时，当作瞬间播完（纯文字模式）。"""
 
@@ -148,16 +160,19 @@ def create_app(hub: Hub | None = None) -> FastAPI:
 
     # ---------- 页面 ----------
     @app.get("/", include_in_schema=False)
-    async def console_page():
-        return FileResponse(WEB / "console.html")
-
-    @app.get("/stage", include_in_schema=False)
+    @app.get("/stage", include_in_schema=False)      # 旧地址，保留
     async def stage_page():
-        return FileResponse(WEB / "stage.html")
+        """主窗口：只有形象。"""
+        return FileResponse(WEB / "stage.html", headers=NO_CACHE)
+
+    @app.get("/panel", include_in_schema=False)
+    async def panel_page():
+        """设置窗口：记录和设置。"""
+        return FileResponse(WEB / "panel.html", headers=NO_CACHE)
 
     DESIGN_DIR.mkdir(parents=True, exist_ok=True)
     app.mount("/designs", StaticFiles(directory=DESIGN_DIR, html=True), name="designs")
-    app.mount("/static", StaticFiles(directory=WEB), name="static")
+    app.mount("/static", FreshStatic(directory=WEB), name="static")
 
     # ---------- 状态 ----------
     @app.get("/api/state")
