@@ -26,6 +26,9 @@ function renderPresence() {
   const running = state.tasks.filter((t) => t.status === 'running');
   stage.dataset.working = running.length ? '1' : '0';
   $('bot-name').textContent = state.settings.name || '';
+  // 替主人开会时，让会上的人一眼看出它是谁的 AI
+  const owner = (state.settings.owner || '').trim();
+  $('ai-tag').textContent = owner && state.settings.role === 'delegate' ? `${owner}的 AI` : 'AI';
   document.title = state.settings.name ? `${state.settings.name} · AI` : '数字人';
   const p = $('progress');
   p.hidden = !running.length;

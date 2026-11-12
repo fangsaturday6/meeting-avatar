@@ -18,6 +18,7 @@
     </div>
     <div id="controls">
       <a id="link-stage" class="btn ghost" href="/stage?autostart=1" target="avatar-stage">打开形象页</a>
+      <div id="engagement" class="segmented" role="radiogroup" aria-label="它说多少" data-setting="engagement"></div>
       <button id="btn-mute" class="btn" type="button" aria-pressed="false" hidden>静音</button>
       <button id="btn-hush" class="btn" type="button" hidden>让它停下</button>
       <button id="btn-stop" class="btn danger" type="button" hidden>结束会议</button>
@@ -53,14 +54,26 @@
         <ul id="tasks"></ul>
       </section>
 
+      <section id="meetings-panel" class="card" hidden>
+        <h2>会议记录</h2>
+        <ul id="meetings"></ul>
+      </section>
+
       <details id="settings-panel" class="card" open>
         <summary><h2>设置</h2></summary>
         <form id="settings" autocomplete="off">
-          <label>名字<input id="set-name" name="name" maxlength="12"></label>
-          <div class="field"><span id="scene-label">场景</span><div id="set-scene" class="segmented" role="radiogroup" aria-labelledby="scene-label"></div></div>
+          <div class="pair">
+            <label>它的名字<input id="set-name" name="name" maxlength="12"></label>
+            <label>我的名字<input id="set-owner" name="owner" maxlength="12"></label>
+          </div>
+          <div id="set-role" class="segmented" role="radiogroup" aria-label="我在不在场" data-setting="role"></div>
+          <label class="check" id="open-book-row" hidden><input id="set-open-book" name="open_book" type="checkbox">可以谈我的其他项目和别的会</label>
+          <div class="field"><span id="scene-label">场景</span><div id="set-scene" class="segmented" role="radiogroup" aria-labelledby="scene-label" data-setting="scene"></div></div>
           <label>嗓音<select id="set-voice" name="voice"></select></label>
           <label>语速<input id="set-speed" name="speed" type="range" min="0.8" max="1.5" step="0.05"></label>
-          <label>项目目录<input id="set-project" name="project_dir" placeholder="/Users/你/项目" spellcheck="false"></label>
+          <label>这场会聊的项目<input id="set-project" name="project_dir" placeholder="/Users/你/项目" spellcheck="false"></label>
+          <label>我的项目都放在<input id="set-projects-root" name="projects_root" spellcheck="false">
+            <output id="projects-count" for="set-projects-root set-project"></output></label>
           <label>会议背景<textarea id="set-topic" name="topic" rows="3" placeholder="这场会要讨论什么、谁参加"></textarea></label>
           <label class="check"><input id="set-skills" name="use_my_skills" type="checkbox">做设计时用我本机 Claude 的技能</label>
           <p id="settings-error" class="field-error" role="alert" hidden></p>
@@ -69,6 +82,18 @@
     </aside>
   </main>
 </div>
+
+<dialog id="reader" aria-labelledby="reader-title">
+  <header id="reader-head">
+    <div id="reader-heading"><h2 id="reader-title"></h2><p id="reader-sub"></p></div>
+    <button id="btn-minutes" class="btn" type="button">整理纪要</button>
+    <button id="btn-copy-path" class="btn" type="button">复制路径</button>
+    <button id="btn-reader-close" class="btn ghost" type="button" aria-label="关闭">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </header>
+  <div id="reader-body"></div>
+</dialog>
 <script type="module" src="/static/console.js"></script>
 </body>
 </html>

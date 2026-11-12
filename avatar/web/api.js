@@ -16,6 +16,18 @@ export async function call(method, path, body) {
   }
 }
 
+// 取一段纯文本（会议记录是 Markdown 文本，不是 JSON）
+export async function callText(path) {
+  try {
+    const r = await fetch(path);
+    if (r.ok) return { ok: true, data: await r.text() };
+    const data = await r.json().catch(() => ({}));
+    return { ok: false, message: typeof data.detail === 'string' ? data.detail : '没读到' };
+  } catch {
+    return { ok: false, message: '连不上数字人的后台，请确认它还在运行' };
+  }
+}
+
 export const api = {
   state: () => call('GET', '/api/state'),
   start: () => call('POST', '/api/meeting/start'),
@@ -28,6 +40,9 @@ export const api = {
   createTask: (kind, brief) => call('POST', '/api/tasks', { kind, brief }),
   showOnBoard: (task_id) => call('POST', '/api/board', { task_id }),
   settings: (patch) => call('PATCH', '/api/settings', patch),
+  meetings: () => call('GET', '/api/meetings'),
+  meeting: (id) => callText(`/api/meetings/${encodeURIComponent(id)}`),
+  makeMinutes: (id) => call('POST', `/api/meetings/${encodeURIComponent(id)}/minutes`),
 };
 
 function upsert(list, item) {
@@ -50,6 +65,13 @@ export function reduce(state, ev) {
     case 'task': upsert(state.tasks, ev.task); return 'tasks';
     case 'board': state.board_task_id = ev.task_id; return 'tasks';
     case 'settings': state.settings = ev.settings; return 'settings';
+    case 'meetings': state.meetings = ev.meetings; return 'meetings';
+    case 'projects': state.projects = ev.projects; return 'settings';
+    case 'minutes':     // 一场会的纪要开始整理 / 整理完了
+      state.minuting = state.minuting.filter((id) => id !== ev.id);
+      if (ev.state === 'running') state.minuting.push(ev.id);
+      state.minutes_result = { id: ev.id, state: ev.state };
+      return 'meetings';
     default: return null;
   }
 }
@@ -58,7 +80,9 @@ export function emptyState() {
   return {
     status: 'off', muted: false, brain_ok: true, stage_online: false, humans_speaking: false,
     settings: {}, speakers: [], lines: [], tasks: [], board_task_id: null,
-    ready: { ears: false, speakers: false, local_voice: false }, voices: {}, scenes: {}, task_kinds: [],
+    meetings: [], record_id: '', minuting: [], minutes_result: null, projects: { root: '', names: [] },
+    ready: { ears: false, speakers: false, local_voice: false },
+    voices: {}, scenes: {}, roles: {}, engagements: {}, task_kinds: [],
     connected: false,
   };
 }

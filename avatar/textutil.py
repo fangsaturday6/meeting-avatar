@@ -6,8 +6,13 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 SILENT = "[静]"
-TASK_KINDS = ("查资料", "查代码", "做设计")
-_DISPATCH_RE = re.compile(r"\[\[\s*派工\s*(查资料|查代码|做设计)\s*[:：]\s*(.+?)\s*\]\]", re.S)
+TASK_KINDS = ("查资料", "查代码", "查会议", "做设计")
+_DISPATCH_RE = re.compile(r"\[\[\s*派工\s*(查资料|查代码|查会议|做设计)\s*[:：]\s*(.+?)\s*\]\]", re.S)
+# 大脑听到「少说点 / 多说点」时用这个标记调整自己的参与度
+ENGAGE_WORDS = {"少说": "quiet", "适中": "normal", "多说": "active"}
+_ENGAGE_RE = re.compile(r"\[\[\s*参与\s*[:：]?\s*(少说|适中|多说)\s*\]\]")
+# 大脑认出某位说话人是谁时用这个标记给他改名：[[称呼 说话人2=张三]]
+_NAME_RE = re.compile(r"\[\[\s*称呼\s*[:：]?\s*([^=＝\]]{1,30}?)\s*[=＝]\s*([^=＝\]]{1,30}?)\s*\]\]")
 
 _HARD = "。！？!?；;\n"
 _SOFT = "，,、：:"
@@ -17,6 +22,7 @@ _CLOSERS = "”’\"'）)】」』"
 def clean_for_speech(text: str) -> str:
     """去掉念不出来的东西：标记符号、表情、括号里的舞台提示。"""
     text = text.replace(SILENT, "")
+    text = re.sub(r"^\s*\[[^\[\]\n]{1,16}\]\s*", "", text)       # 学着字幕格式带出来的「[说话人1] 」前缀
     text = re.sub(r"[（(][^（()）]{0,30}[)）]", "", text)       # （笑）(停顿)
     text = re.sub(r"[*#`_~>|]+", "", text)                     # markdown 符号
     text = re.sub(r"^\s*[-•·]\s+", "", text, flags=re.M)        # 列表符
@@ -81,16 +87,21 @@ class Reply:
     silent: bool = False
     speech: str = ""
     dispatch: tuple[str, str] | None = None  # (类型, 简述)
+    engagement: str | None = None            # quiet | normal | active：它要调整自己的参与度
+    names: tuple[tuple[str, str], ...] = ()  # (原来的叫法, 真名)：它认出了某位说话人是谁
 
 
 def parse_reply(raw: str) -> Reply:
     s = raw.strip()
     m = _DISPATCH_RE.search(s)
     dispatch = (m.group(1), m.group(2).strip()) if m else None
+    e = _ENGAGE_RE.search(s)
+    engagement = ENGAGE_WORDS[e.group(1)] if e else None
+    names = tuple((a.strip(), b.strip()) for a, b in _NAME_RE.findall(s))
     speech = clean_for_speech(re.sub(r"\[\[.*?\]\]", "", s, flags=re.S))
-    if s.startswith("[静") or not speech:
-        return Reply(silent=True, dispatch=dispatch)
-    return Reply(silent=False, speech=speech, dispatch=dispatch)
+    silent = s.startswith("[静") or not speech
+    return Reply(silent=silent, speech="" if silent else speech, dispatch=dispatch,
+                 engagement=engagement, names=names)
 
 
 class ReplyStream:
@@ -105,6 +116,12 @@ class ReplyStream:
     @property
     def silent(self) -> bool:
         return bool(self._silent)
+
+    @property
+    def prefixed(self) -> bool:
+        """回答是不是以「[某人] 」开头：这是它在照抄字幕格式的明显迹象。"""
+        s = self.raw.lstrip()
+        return not s.startswith("[静") and bool(re.match(r"\[[^\[\]\n]{1,16}\]", s))
 
     def feed(self, delta: str) -> list[str]:
         self.raw += delta
@@ -125,12 +142,17 @@ class ReplyStream:
         return rest, parse_reply(self.raw)
 
     def _speakable(self, final: bool) -> str:
-        k = self.raw.find("[[")
+        """到目前为止可以念的部分：完整的 [[标记]] 剔掉，还没写完的标记先压住不念。
+
+        标记可能出现在话的前面、中间或后面，剔掉之后前后的话都要照常念出来。
+        """
+        text = re.sub(r"\[\[.*?\]\]", "", self.raw, flags=re.S)
+        k = text.find("[[")
         if k >= 0:
-            return self.raw[:k]
-        if not final and self.raw.endswith("["):
-            return self.raw[:-1]
-        return self.raw
+            return text[:k]            # 标记还没写完
+        if not final and text.endswith("["):
+            return text[:-1]           # 可能是标记的开头，等下一个字再说
+        return text
 
     def _emit(self, speakable: str) -> list[str]:
         new, self._emitted = speakable[self._emitted :], max(self._emitted, len(speakable))
@@ -160,6 +182,16 @@ def echo_score(heard: str, spoken: str) -> float:
         return 0.0
     blocks = SequenceMatcher(None, h, s).get_matching_blocks()
     return sum(b.size for b in blocks if b.size >= 2) / len(h)
+
+
+_BACKCHANNEL = re.compile(
+    r"(嗯|恩|唔|啊|哦|噢|喔|诶|欸|对|好|是|行|的|呀|吧|嘛|ok|okay|yes|yeah|明白|知道了?|懂了?|可以|没错|没问题|你?继续|你?接着说|你说|然后呢)+", re.I)
+
+
+def is_backchannel(text: str) -> bool:
+    """这句话是不是只是附和（嗯、对、好的、你继续）：说明对方在听，不是要抢话。"""
+    n = _norm(text)
+    return 0 < len(n) <= 6 and bool(_BACKCHANNEL.fullmatch(n))
 
 
 def fix_name(text: str, name: str) -> str:
