@@ -223,7 +223,8 @@ const actions = {
     await audio;
     ui.busy = false; renderDock(); showDock();
   },
-  async stop() { ui.busy = true; renderDock(); await run(api.stop); ui.busy = false; renderDock(); },
+  // 「结束」的回报在等接口的那一会儿就到了，当时还在忙、没松开麦克风，所以忙完再同步一次
+  async stop() { ui.busy = true; renderDock(); await run(api.stop); ui.busy = false; renderDock(); syncAudio(); },
   mute: () => run(() => api.mute(!state.muted)),
   hush: () => run(api.hush),
   notes: () => openPanel('notes'),
