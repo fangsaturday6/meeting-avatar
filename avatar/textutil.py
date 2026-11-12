@@ -82,6 +82,68 @@ class SentenceSplitter:
         return None
 
 
+# ---- 自言自语 ----
+# 快脑（关了思考的小模型）偶尔把推敲过程用英文写进正文："Wait — let me reconsider this. …"，写完才是真正要说的那句。
+# 它该说的是中文口语，英文只会是夹在话里的个别词和名字（TV、GitHub Actions、Sign in with Apple）。
+# 连着四个以上英文词、里面又有「我、应该、不、等等」这类词，就不是在说话，是在跟自己嘀咕。
+_EN_WORD = r"[A-Za-z][A-Za-z0-9_'’./-]*"
+_EN_GAP = r"[ \t,;:!?\"“”‘’()—–…'.-]+"
+_SELFTALK = re.compile(rf"{_EN_WORD}(?:{_EN_GAP}{_EN_WORD}){{3,}}")
+_SELFTALK_NEAR = re.compile(rf"{_EN_WORD}(?:{_EN_GAP}{_EN_WORD}){{2,}}")   # 已经在自言自语之后：三个词就算
+_EN_TAIL = re.compile(rf"{_EN_WORD}(?:{_EN_GAP}{_EN_WORD})*(?:{_EN_GAP})?$")
+_EN_LABEL = re.compile(rf"^\s*{_EN_WORD}(?:{_EN_GAP}{_EN_WORD})*\s*[:：]\s*")   # 行首的 "Output:"、"So final:"
+_CJK = re.compile(r"[一-鿿]")
+_EN_MUTTER = frozenset(   # 人称、情态、否定、系词、口头禅：产品名和命令里一般没有
+    "i i'm i'll i'd i've me my we you it it's this that is are was am be do does don't doesn't did not no "
+    "so but if should shouldn't must can can't cannot could will won't would need needs let let's wait hmm "
+    "also just actually here there what which why because say says output answer reply respond user rules".split())
+
+
+def _find_selftalk(line: str) -> re.Match | None:
+    for m in _SELFTALK.finditer(line):
+        words = (w.lower().replace("’", "'").strip(".-/") for w in re.findall(_EN_WORD, m.group()))
+        if any(w in _EN_MUTTER for w in words):
+            return m
+    return None
+
+
+def _last_words(lines: list[str]) -> list[str]:
+    """自言自语之后，它最后想好要说的那一段：最后一段带中文的话里，排在英文嘀咕后面的那几行。"""
+    para: list[str] = []
+    for line in reversed(lines):
+        if not _CJK.search(line):          # 空行、"Output:"、"<br>"
+            if para:
+                break
+            continue
+        if _SELFTALK_NEAR.search(line):    # 还在嘀咕（哪怕夹着中文）：要说的话在它后面
+            break
+        para.insert(0, line)
+    # 行首的 "Output:"、"So final:" 和它给这句话加的引号不念
+    return [_EN_LABEL.sub("", x).strip(" \t\"“”") if _EN_LABEL.match(x) else x for x in para]
+
+
+def without_selftalk(text: str, final: bool = True) -> tuple[str, bool]:
+    """把大脑输出里的自言自语去掉。返回（可以念的部分，有没有自言自语）。text 是已经剔掉 [[标记]] 的输出。
+
+    - 一行里出现成段的英文嘀咕：从那里起整行不念（后面夹着的中文是它在引用规矩，不是要说的话）。
+    - 这之后的内容先都不念，等它写完（final）只留最后一段干净的中文——那才是它想好要说的；
+      中间的推敲和草稿、单独一行的 "Output:"、行首的 "So final:" 都不要。
+    - 流式调用时（final=False），一行结尾还没写完的英文词先压着，看清是个别词还是一段话再放行，
+      保证已经交出去的部分之后不会变。
+    """
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        m = _find_selftalk(line)
+        if m:
+            head = "\n".join(lines[:i] + [line[:m.start()]])
+            if not final:
+                return head, True
+            return "\n".join([head] + _last_words(lines[i + 1:])), True
+    if not final and (m := _EN_TAIL.search(lines[-1])):
+        return text[:len(text) - len(lines[-1]) + m.start()], False
+    return text, False
+
+
 @dataclass
 class Reply:
     silent: bool = False
@@ -89,6 +151,7 @@ class Reply:
     dispatch: tuple[str, str] | None = None  # (类型, 简述)
     engagement: str | None = None            # quiet | normal | active：它要调整自己的参与度
     names: tuple[tuple[str, str], ...] = ()  # (原来的叫法, 真名)：它认出了某位说话人是谁
+    selftalk: bool = False                   # 输出里夹了自言自语（见 without_selftalk）：这一轮跑偏了
 
 
 def parse_reply(raw: str) -> Reply:
@@ -98,10 +161,11 @@ def parse_reply(raw: str) -> Reply:
     e = _ENGAGE_RE.search(s)
     engagement = ENGAGE_WORDS[e.group(1)] if e else None
     names = tuple((a.strip(), b.strip()) for a, b in _NAME_RE.findall(s))
-    speech = clean_for_speech(re.sub(r"\[\[.*?\]\]", "", s, flags=re.S))
+    said, selftalk = without_selftalk(re.sub(r"\[\[.*?\]\]", "", s, flags=re.S))
+    speech = clean_for_speech(said)
     silent = s.startswith("[静") or not speech
     return Reply(silent=silent, speech="" if silent else speech, dispatch=dispatch,
-                 engagement=engagement, names=names)
+                 engagement=engagement, names=names, selftalk=selftalk)
 
 
 class ReplyStream:
@@ -149,10 +213,10 @@ class ReplyStream:
         text = re.sub(r"\[\[.*?\]\]", "", self.raw, flags=re.S)
         k = text.find("[[")
         if k >= 0:
-            return text[:k]            # 标记还没写完
-        if not final and text.endswith("["):
-            return text[:-1]           # 可能是标记的开头，等下一个字再说
-        return text
+            text = text[:k]            # 标记还没写完
+        elif not final and text.endswith("["):
+            text = text[:-1]           # 可能是标记的开头，等下一个字再说
+        return without_selftalk(text, final)[0]      # 自言自语不念
 
     def _emit(self, speakable: str) -> list[str]:
         new, self._emitted = speakable[self._emitted :], max(self._emitted, len(speakable))
@@ -182,6 +246,19 @@ def echo_score(heard: str, spoken: str) -> float:
         return 0.0
     blocks = SequenceMatcher(None, h, s).get_matching_blocks()
     return sum(b.size for b in blocks if b.size >= 2) / len(h)
+
+
+def mentions(said: str, source: str) -> bool:
+    """said 这段话像不像在讲 source 里的内容：said 里相邻的两个字，有两成以上（且不少于 8 处）在 source 里出现过。
+
+    只用来判断「它答话时是不是顺带把查到的结果讲了」。口头转述会换说法，所以门槛低；
+    「在，你说」「还在查，快了」这种和结果没有重合的话过不了。
+    """
+    s, src = _norm(said), _norm(source)
+    pairs = [s[i:i + 2] for i in range(len(s) - 1)]
+    have = {src[i:i + 2] for i in range(len(src) - 1)}
+    hits = sum(p in have for p in pairs)
+    return hits >= 8 and hits >= 0.2 * len(pairs)
 
 
 _BACKCHANNEL = re.compile(

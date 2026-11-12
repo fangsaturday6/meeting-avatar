@@ -76,3 +76,15 @@ def test_similar_but_distinct_voices_split_at_threshold():
     a = np.zeros(8); a[0] = 1
     b = np.zeros(8); b[0], b[1] = 0.5, 0.866          # 与 a 的相似度 0.5，低于 0.55
     assert book.assign(a, seconds=5) != book.assign(b, seconds=5)
+
+
+def test_keeps_the_scores_behind_its_last_decision():
+    """认成了谁、和每个人有多像，留给日志：同一个人被分成两位时靠它查。"""
+    rng = np.random.default_rng(5)
+    a, b = rng.normal(size=192), rng.normal(size=192)
+    book = SpeakerBook()
+    book.assign(a); book.assign(b)
+    assert book.assign(a + rng.normal(0, 0.05, 192)) == 1
+    assert book.last_scores["说话人1"] > 0.9 > 0.3 > book.last_scores["说话人2"]
+    book.assign(None)
+    assert book.last_scores == {}              # 太短、没有声纹：没有可比的

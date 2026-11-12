@@ -18,6 +18,7 @@ from .archive import MEETINGS_DIR, NO_CONTENT
 from .config import DESIGN_DIR, WORKSPACE, Settings, child_env
 from .floor import WorkResult
 from .meeting import Task
+from .redact import Redactor, login_email
 
 log = logging.getLogger("avatar.slow")
 
@@ -329,6 +330,8 @@ class SlowBrain:
 
         stdin_text：提示太长（整场会议记录）时不放在命令行参数里，从标准输入送进去。
         """
+        # 干活的进程同样知道登录邮箱（命令行自动带的，关不掉）：结果和进度上屏、进记录之前过一遍
+        guard = Redactor(await asyncio.to_thread(login_email))
         proc = await asyncio.create_subprocess_exec(
             *cmd, cwd=str(cwd), env=child_env(),
             stdin=asyncio.subprocess.DEVNULL if stdin_text is None else asyncio.subprocess.PIPE,
@@ -354,9 +357,9 @@ class SlowBrain:
                 if ev.get("type") == "assistant":
                     for block in ev.get("message", {}).get("content", []):
                         if block.get("type") == "tool_use":
-                            on_progress(describe(block.get("name", ""), block.get("input") or {}))
+                            on_progress(guard.clean(describe(block.get("name", ""), block.get("input") or {})))
                 elif ev.get("type") == "result":
-                    text = (ev.get("result") or "").strip()
+                    text = guard.clean((ev.get("result") or "").strip())
                     ok = not ev.get("is_error") and bool(text)
                     result = WorkResult(ok, text or "没有得到结果")
             return result, False

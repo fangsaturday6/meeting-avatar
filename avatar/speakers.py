@@ -34,6 +34,7 @@ class SpeakerBook:
         self.threshold = threshold
         self.speakers: dict[int, Speaker] = {}
         self.last_id: int | None = None
+        self.last_scores: dict[str, float] = {}   # 最近一段声音和每位已知说话人有多像（查「为什么认成了他」用）；没有声纹时是空的
         self._next = 1
 
     def _new(self, name: str | None = None) -> Speaker:
@@ -50,6 +51,7 @@ class SpeakerBook:
 
     def assign(self, embedding: np.ndarray | None, seconds: float = 10.0) -> int:
         """给一段语音找说话人。seconds 是这段语音的长度。没有声纹时沿用上一位。"""
+        self.last_scores = {}
         if embedding is None or len(embedding) == 0:
             return self._reuse_last()
 
@@ -60,6 +62,7 @@ class SpeakerBook:
             if sp.centroid is None:
                 continue
             sim = float(np.dot(sp.centroid, e))
+            self.last_scores[sp.name] = sim
             if sim > best_sim:
                 best, best_sim = sp, sim
         if best is None or best_sim < self.threshold:

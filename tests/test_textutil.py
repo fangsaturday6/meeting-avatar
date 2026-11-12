@@ -203,3 +203,37 @@ def test_tidy_is_stable():
     once = tidy("那那那个，就是就是，他他就回问题了，嗯，然后呢，呃，我们再看一下。")
     assert once == "那个，就是，他就回问题了，然后呢，我们再看一下。"
     assert tidy(once) == once
+
+
+def test_mentions_tells_a_spoken_report_from_small_talk():
+    """它答话时有没有顺带把查到的结果讲了。例子取自 2026-11-12 那场会。"""
+    from avatar.textutil import mentions
+    result = ("这个项目和会议、语音完全无关。它是一个免费在线视频聚合搜索与观看平台：聚合多个采集站并行搜索影视、"
+              "同名影片跨源合并比较、HLS 在线播放、直播订阅与节目单、播放进度本机续播。")
+    assert mentions("刚才查过了，TV 这个项目是免费在线视频聚合搜索和观看平台，跟会议、语音没有关系。", result)
+    assert mentions("查的是 LibreTV，它是个免费的在线影视聚合平台，能搜多个采集站的影视，在线播放和直播都有。", result)
+    assert not mentions("在，你说。", result)
+    assert not mentions("好，我已经派去查了，查完告诉你。", result)
+    assert not mentions("还在查 TV 项目，快了。", result)
+    assert not mentions("", result) and not mentions("查完了", "")
+
+
+def test_english_self_talk_is_held_back_while_streaming():
+    from avatar.textutil import ReplyStream, without_selftalk
+    # 一个字一个字来：已经交出去的句子之后不会变，自言自语一句都不交
+    for step in (1, 3, 7):
+        raw = "好的。 Wait — let me reconsider this.\n\nOutput:\nSo final: 这个在电脑上自己看。"
+        rs, out = ReplyStream(), []
+        for i in range(0, len(raw), step):
+            out += rs.feed(raw[i:i + step])
+        rest, reply = rs.finish()
+        assert out == ["好的。"] and rest == ["这个在电脑上自己看。"] and reply.selftalk
+        assert reply.speech == "好的。 \n这个在电脑上自己看。"
+    assert without_selftalk("先看 TV 项目，再看 bom-for-wecom。") == ("先看 TV 项目，再看 bom-for-wecom。", False)
+    assert without_selftalk("我用 Go", final=False) == ("我用 ", False)      # 结尾的英文词先压着
+    assert without_selftalk("我用 Go 写", final=False) == ("我用 Go 写", False)
+    assert without_selftalk("Wait — let me", final=False) == ("", False)
+    assert without_selftalk("跑 uv run python -m avatar.demo 就行") == ("跑 uv run python -m avatar.demo 就行", False)
+    assert without_selftalk("Wait — let me think", final=False) == ("", True)
+    # 自言自语之后没有一句干净的中文：什么都不念
+    assert without_selftalk("No wait — let me reconsider.\nJust the refusal.")[0].strip() == ""

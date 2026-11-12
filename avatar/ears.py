@@ -19,8 +19,41 @@ log = logging.getLogger("avatar.ears")
 SAMPLE_RATE = 16000
 
 
+class Tape:
+    """最近一段音频的循环录音带。断句只给片段本身，要往前多带一点就得自己留着。"""
+
+    def __init__(self, size: int):
+        self._ring = np.zeros(size, dtype=np.float32)
+        self.end = 0               # 一共写进来多少采样；位置都按这个计数，和断句给的片段起点是同一把尺
+
+    def write(self, samples: np.ndarray) -> None:
+        n = len(self._ring)
+        skipped = max(0, len(samples) - n)      # 一次写进来的比整盘带子还长：只留得下最后那一盘
+        samples = samples[skipped:]
+        i = (self.end + skipped) % n
+        k = min(len(samples), n - i)
+        self._ring[i:i + k] = samples[:k]
+        self._ring[:len(samples) - k] = samples[k:]
+        self.end += skipped + len(samples)
+
+    def before(self, pos: int, count: int) -> np.ndarray:
+        """pos 之前的 count 个采样；开头不够、或者已经被盖掉的部分就不给。"""
+        first = max(pos - count, self.end - len(self._ring), 0)
+        if first >= pos:
+            return np.zeros(0, dtype=np.float32)
+        return self._ring[np.arange(first, pos) % len(self._ring)]
+
+    def reset(self) -> None:
+        self.end = 0
+
+
 class Ears:
     min_silence = 0.5      # 停顿多久算一句话说完
+    # 交给识别的音频从片段起点再往前带这么多秒。断句要等确认是人声才算开始，片段起点常比真实起音晚几十毫秒
+    # （实测最晚 141 毫秒），句首的声母被削掉，第一个字就认错：「查完」成了「卡完」，「差不多」成了「不多」。
+    # 176 句合成语音加底噪实测：不带时错 110 字，带 0.1~0.2 秒错 95~98 字（不断句整段识别是 93），
+    # 带到 0.5 秒反而错 123 字（前面的底噪太长）。
+    lead_in = 0.2
     min_embed_seconds = 1.0  # 短于这个长度的片段声纹不可靠，不提取
     live_windows = 190       # 中途分辨说话人时最多看最近约 6 秒
 
@@ -40,6 +73,7 @@ class Ears:
         self._spk = None
         self._window = 512
         self._buf = np.zeros(0, dtype=np.float32)
+        self._tape = Tape(SAMPLE_RATE * 24)   # 比最长的一段话（20 秒）再多留几秒
         self._speaking = False
         self._live: list[np.ndarray] = []   # 当前这段人声到目前为止的采样（用来中途分辨是谁在说）
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ears")
@@ -75,6 +109,7 @@ class Ears:
     def reset(self) -> None:
         """换一场会议或换了音频来源时清掉残留状态。"""
         self._buf = np.zeros(0, dtype=np.float32)
+        self._tape.reset()
         if self._vad is not None:
             self._vad.reset()
         if self._speaking:
@@ -94,6 +129,7 @@ class Ears:
         while len(self._buf) >= w:
             win = self._buf[:w]
             self._vad.accept_waveform(win)
+            self._tape.write(win)
             self._buf = self._buf[w:]
             speaking = self._vad.is_speech_detected()
             if speaking:
@@ -110,9 +146,10 @@ class Ears:
                 self.on_speech_end(self.min_silence)
             while not self._vad.empty():
                 seg = np.array(self._vad.front.samples, dtype=np.float32)
+                lead = self._tape.before(self._vad.front.start, int(self.lead_in * SAMPLE_RATE))
                 self._vad.pop()
                 loop = asyncio.get_running_loop()
-                self._results.put_nowait(loop.run_in_executor(self._pool, self._recognize, seg))
+                self._results.put_nowait(loop.run_in_executor(self._pool, self._recognize, seg, lead))
 
     async def _consume(self) -> None:
         while True:
@@ -127,10 +164,11 @@ class Ears:
                 log.exception("这段话没识别出来")
 
     # ---- 识别（线程池里） ----
-    def _recognize(self, samples: np.ndarray) -> tuple[str, np.ndarray | None, float]:
+    def _recognize(self, samples: np.ndarray, lead: np.ndarray) -> tuple[str, np.ndarray | None, float]:
+        """samples 是断句给的片段，lead 是它前面多带的一小段：只给识别用，时长和声纹仍按片段本身算。"""
         seconds = len(samples) / SAMPLE_RATE
         st = self._asr.create_stream()
-        st.accept_waveform(SAMPLE_RATE, samples)
+        st.accept_waveform(SAMPLE_RATE, np.concatenate([lead, samples]))
         self._asr.decode_stream(st)
         text = strip_noise(st.result.text, getattr(st.result, "event", ""))
         if not text:

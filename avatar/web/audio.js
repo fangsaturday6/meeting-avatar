@@ -1,9 +1,15 @@
 // 主窗口的耳朵和嘴：采集麦克风送给后台，接收语音片段按顺序播放。
 // 收音和播放都在浏览器里，是为了用浏览器自带的回声消除（当面开会时数字人不会听到自己）。
 
-export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink }) {
+const MIC_STALL = 1500;      // 麦克风正常每 40 毫秒来一包声音；这么久没有新的，就当它断了
+const GONE = ['NotFoundError', 'OverconstrainedError'];
+
+// onMic(error)：麦克风自己断过之后重新接的结果，接上了是 null
+export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onMic = () => {} }) {
   let ws = null, wantOpen = false, replaced = false, retry = null;
-  let micStream = null, micCtx = null;
+  let want = { scene: 'room', micId: '', speakerId: '' };     // 上一次要接的场合和设备
+  let micStream = null, micCtx = null, micJob = Promise.resolve();
+  let micAt = 0, micBusy = 0, micFallback = false, micWatch = 0, lastCheck = 0;
   let outCtx = null, analyser = null, outEl = null;
   let queue = [], current = null, generation = 0, decodeChain = Promise.resolve();
   let raf = 0;
@@ -19,7 +25,7 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink }) {
       outEl = new Audio();
       outEl.srcObject = dest.stream;
     }
-    if (outEl.setSinkId) await outEl.setSinkId(speakerId || '').catch(() => {});
+    await setSink(speakerId);
     await outCtx.resume();
     await outEl.play();
     cancelAnimationFrame(raf);
@@ -32,6 +38,12 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink }) {
       raf = requestAnimationFrame(tick);
     };
     tick();
+  }
+
+  // 选的扬声器不在了（耳机断开）就用系统默认的，不然它说话没人听得到
+  async function setSink(speakerId) {
+    if (!outEl || !outEl.setSinkId) return;
+    await outEl.setSinkId(speakerId || '').catch(() => outEl.setSinkId('').catch(() => {}));
   }
 
   function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
@@ -82,26 +94,51 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink }) {
   }
 
   // ---------- 采集 ----------
-  async function setupMic(scene, micId) {
-    stopMic();
-    const room = scene !== 'online';   // 线上会议的声音来自虚拟声卡，不能做降噪和回声消除
-    micStream = await navigator.mediaDevices.getUserMedia({
+  const live = () => wantOpen && !replaced;
+
+  function getMic(micId, room) {
+    return navigator.mediaDevices.getUserMedia({
       audio: {
         deviceId: micId ? { exact: micId } : undefined,
         echoCancellation: room, noiseSuppression: room, autoGainControl: room, channelCount: 1,
       },
     });
-    try { micCtx = new AudioContext({ sampleRate: 16000 }); } catch { micCtx = new AudioContext(); }
-    await micCtx.audioWorklet.addModule('/static/pcm-worklet.js');
-    const node = new AudioWorkletNode(micCtx, 'pcm');
+  }
+
+  async function openMic({ scene, micId }) {
+    stopMic();
+    const room = scene !== 'online';   // 线上会议的声音来自虚拟声卡，不能做降噪和回声消除
+    let stream;
+    try {
+      stream = await getMic(micId, room);
+      micFallback = false;
+    } catch (e) {
+      // 选定的麦克风不在了（多半是耳机断开）：当面开会先用系统默认的顶上，它回来了再换回去。
+      // 线上会议不顶：换成真麦克风，它听到的就成了你的房间和它自己的声音
+      if (!micId || !room || !GONE.includes(e.name)) throw e;
+      stream = await getMic('', room);
+      micFallback = true;
+    }
+    let ctx;
+    try { ctx = new AudioContext({ sampleRate: 16000 }); } catch { ctx = new AudioContext(); }
+    await ctx.audioWorklet.addModule('/static/pcm-worklet.js').catch(() => {});
+    if (!live()) {                     // 等的这一会儿会议已经结束，或者被别的窗口顶替了
+      stream.getTracks().forEach((t) => t.stop());
+      ctx.close().catch(() => {});
+      return;
+    }
+    micStream = stream; micCtx = ctx;
+    const node = new AudioWorkletNode(ctx, 'pcm');
     node.port.onmessage = (e) => {
+      micAt = performance.now();
       if (ws && ws.readyState === 1) ws.send(e.data.pcm);
       onMicLevel(Math.min(1, e.data.level * 3));
     };
-    const mute = micCtx.createGain();
+    const mute = ctx.createGain();
     mute.gain.value = 0;
-    micCtx.createMediaStreamSource(micStream).connect(node).connect(mute).connect(micCtx.destination);
-    await micCtx.resume();
+    ctx.createMediaStreamSource(stream).connect(node).connect(mute).connect(ctx.destination);
+    stream.getAudioTracks()[0].addEventListener('ended', healMic);     // 设备被拔掉
+    await ctx.resume();
   }
 
   function stopMic() {
@@ -109,6 +146,47 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink }) {
     if (micCtx) micCtx.close().catch(() => {});
     micStream = micCtx = null;
   }
+
+  // 按 want 接麦克风。开和关排着队做：自动重接、换设备、点「重试」可能同时来
+  async function setupMic() {
+    micBusy++;
+    clearInterval(micWatch);
+    lastCheck = performance.now();
+    micWatch = setInterval(checkMic, 500);
+    const job = micJob.catch(() => {}).then(() => openMic(want));
+    micJob = job;
+    try {
+      await job;
+    } catch (e) {
+      if (e.name === 'NotAllowedError') clearInterval(micWatch);     // 没给权限：再试也一样，等人点「重试」
+      throw e;
+    } finally {
+      micBusy--;
+      micAt = performance.now();       // 刚接上（或刚试过），给它一点时间
+    }
+  }
+
+  // 麦克风断了（耳机没电、被拔掉、被系统收走），页面收不到任何报错，只是不再有声音数据，所以盯的是数据本身。
+  // 断了就重新接；接不上过一会儿再试，设备一有变化也马上试
+  async function healMic() {
+    if (micBusy || !live()) return;
+    onMicLevel(0);
+    try { await setupMic(); onMic(null); } catch (e) { onMic(e); }
+  }
+
+  function checkMic() {
+    const now = performance.now(), late = now - lastCheck > 1500;
+    lastCheck = now;
+    if (late) micAt = now;             // 页面自己卡了一下（或者电脑刚睡醒），不算麦克风的事
+    else if (now - micAt > MIC_STALL) healMic();
+  }
+
+  navigator.mediaDevices?.addEventListener('devicechange', () => {
+    if (!live()) return;
+    setSink(want.speakerId);           // 选的扬声器回来了就换回去
+    const track = micStream && micStream.getAudioTracks()[0];
+    if (micFallback || !track || track.readyState === 'ended') healMic();
+  });
 
   // ---------- 与后台的音频通道 ----------
   function openSocket() {
@@ -139,23 +217,26 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink }) {
   return {
     // 先接通扬声器和后台，再接麦克风：麦克风拿不到时数字人仍然能说话（抛出的错误由页面提示）
     async start({ scene, micId, speakerId }) {
+      want = { scene, micId, speakerId };
       // 没有点击就启动时（?autostart=1），浏览器可能不让先出声；麦克风开始采集后就允许了，所以失败时放到后面重试
       let outputError = null;
       try { await setupOutput(speakerId); } catch (e) { outputError = e; }
       wantOpen = true; replaced = false;
       if (!ws || ws.readyState > 1) openSocket();
-      await setupMic(scene, micId);
+      await setupMic();
       if (outputError) await setupOutput(speakerId);
     },
     async reconfigure({ scene, micId, speakerId }) {
       if (!wantOpen) return;
+      want = { scene, micId, speakerId };
       await setupOutput(speakerId);
-      await setupMic(scene, micId);
+      await setupMic();
     },
     // 会议结束后松开麦克风和音频通道，系统的麦克风指示灯随之熄灭
     stop() {
       wantOpen = false;
       clearTimeout(retry);
+      clearInterval(micWatch);
       stopPlayback();
       stopMic();
       onMicLevel(0);

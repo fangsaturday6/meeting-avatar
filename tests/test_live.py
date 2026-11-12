@@ -64,6 +64,40 @@ async def test_coughs_and_chairs_do_not_become_words():
     assert len(got) == 2 and "登录" in got[0] and "接口文档" in got[1]
 
 
+async def test_first_word_survives_the_cut():
+    """断句给的片段常比真实起音晚几十毫秒，句首的字就被认错（会上的「查到了吗」成了「谈到了吗」）。
+
+    所以交给识别的音频要从片段起点再往前带一小段。合成的嗓音每次不一样，这里不比识别结果，
+    只查「确实多带了、而且这一小段不算进这句话的时长」。量过的效果见 Ears.lead_in 的说明。
+    """
+    if models.missing(include_optional=False):
+        pytest.skip("模型还没下载")
+    got, handed = [], []
+
+    async def on_utt(text, emb, seconds=0.0):
+        got.append((text, seconds))
+
+    ears = Ears(lambda: None, lambda ago: None, on_utt)
+    ears.load()
+    recognize = ears._recognize
+
+    def spy(samples, lead):
+        handed.append((len(samples), len(lead)))
+        return recognize(samples, lead)
+
+    ears._recognize = spy
+    speech = say_pcm("查完结果没回复我。")
+    for c in chunks(silence(1.0) + speech + silence(1.5)):
+        ears.feed(c)
+        await asyncio.sleep(0)
+    await asyncio.sleep(2)
+    ears.close()
+    print(f"\n交出来：{got}，片段和前面多带的采样数：{handed}")
+    assert len(got) == 1 and "结果没回复我" in got[0][0]
+    assert handed[0][1] == int(Ears.lead_in * 16000)
+    assert abs(got[0][1] - handed[0][0] / 16000) < 0.01     # 时长只算片段本身（声纹靠它判断这句够不够长）
+
+
 async def test_mouth_speaks_locally_and_falls_back():
     m = Mouth(Settings())
     await asyncio.to_thread(m.load)

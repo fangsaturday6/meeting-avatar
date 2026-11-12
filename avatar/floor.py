@@ -10,12 +10,12 @@ import logging
 import re
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import AsyncIterator, Awaitable, Callable, Protocol
 
 from .meeting import Line, Meeting, Task
-from .textutil import (TASK_KINDS, ReplyStream, SentenceSplitter, echo_score, fix_name,
-                       is_backchannel, similar)
+from .textutil import (TASK_KINDS, Reply, ReplyStream, SentenceSplitter, echo_score, fix_name,
+                       is_backchannel, mentions, similar)
 
 log = logging.getLogger("avatar.floor")
 
@@ -52,9 +52,30 @@ class _GiveUp(Exception):
 
 
 @dataclass
+class _Report:
+    """一件做完了、结果还没告诉大家的后台任务。说出口之前一直欠着。
+
+    什么时候说归 Floor 管，大脑只管怎么说：大脑一次只能答一轮，让它「挑个空档」它只能回「静」，
+    之后就再没人问它了，结果也就没人知道。
+    """
+    task: Task
+    text: str                    # 结果；没做成时是原因
+    ok: bool = True
+    asker: int | None = None     # 谁让查的；None = 从界面派的，没有人在等
+    seen: bool = False           # 大脑看过完整结果了
+    touched: bool = False        # 它答别人的话时好像已经讲到了这个结果（下一轮让它自己确认）
+    silent: int = 0              # 单独请它汇报、它却没出声的次数
+    missed: int = 0              # 一直有人说话、没等到空档的次数
+
+
+@dataclass
 class _Attempt:
     """数字人的一次发言尝试：从开始想，到说完或被放弃。"""
     prompt: str = ""
+    heard: str = ""                    # prompt 里听来的那部分（旁注 + 别人的话）；没送进大脑时放回去的就是它
+    reports: list[_Report] = field(default_factory=list)   # 这一轮带给大脑的、还没说出口的任务结果
+    report_only: bool = False          # 这一轮没有人说话，只为把结果告诉大家
+    gave_up: bool = False              # 一直有人在说话，想好的话没说出口
     sent: bool = False                 # 提示是否已经送进大脑
     phase: str = "thinking"            # thinking | waiting | speaking
     planned: list[str] = field(default_factory=list)   # 大脑想说的句子
@@ -88,6 +109,20 @@ class _Attempt:
 # 顶着说的时候，听到这些词（或自己的名字）才停
 _STOP_WORDS = re.compile(r"停一下|停一停|停下|等一下|等等|等会|别说了|先别说|不要说了|闭嘴|安静|打住")
 
+# ---- 大脑跑偏的输出：念什么由 textutil 挡（自言自语不念），下面两样挡的是它的标记 ----
+# 有人在说它话多话少时才会出现的词。它在不相干的回答里乱带 [[参与 …]]（拒绝别人时最常见），
+# 最近的话里没有这些词就不改设置
+_ENGAGE_CUES = re.compile(
+    r"话多|话太多|话真多|少说|少讲|别说|别讲|不要说|不用说|插话|插嘴|打断|安静|闭嘴|消停|吵|啰嗦|罗嗦|话痨|抢话|"
+    r"多说|多讲|说话|不出声|不吭声|怎么不说|光听|说两句|说几句|参与|积极|主动|开口|发言|表态|该说就说")
+# 它把「这句不用查」写成了一条派工：「不需要查，这句不处理」「不用查，直接拒绝」「不要执行」，或者照抄了格式里的占位词
+_NOT_A_TASK = re.compile(
+    r"^\W*(?:(?:不需要|不用|无需|不必|不要)(?:再|去)?(?:查|派|处理|回应|执行)"
+    r"|(?:不需要|不用|无需|不必|不要|不查|别查|不派|别派)\s*(?:$|[，,。.；;：:！!]))"
+    r"|这句不处理|不派工|直接拒绝|^\W*具体要[查做]什么\W*$")
+# 嘴上已经说了不查，手上就不能去查
+_REFUSES = re.compile(r"(?:不[能会去想用必]?|别)查(?![到出过不])|不该派|在电脑上自己看")
+
 
 class Floor:
     stall_line = "不好意思，我这边网络有点卡，稍等一下。"   # 大脑连不上时，用本地语音先说这句
@@ -108,6 +143,10 @@ class Floor:
     start_timeout = 60.0    # 大脑预热最多多久，超过就算这次没连上（之后有人说话时再试）
     task_timeout = 600.0    # 后台任务最长多久
     echo_threshold = 0.6
+    report_asks = 2         # 单独请它汇报结果，它不出声最多问几次；之后由系统替它说一句
+    report_tries = 3        # 汇报一直等不到空档，最多试几次
+    report_ready = "刚才{kind}的结果出来了，在我屏幕上，要听我就讲。"     # 大脑怎么都不出声时说这句
+    report_failed = "刚才{kind}那件事没做成。"
 
     def __init__(self, meeting: Meeting, brain: Brain, mouth: Mouth, player: Player,
                  worker: Worker | None = None, clock: Callable[[], float] = time.monotonic):
@@ -116,6 +155,7 @@ class Floor:
         self.clock = clock
         self.pending: list[str] = []   # 会触发大脑的新内容
         self.carry: list[str] = []     # 下次顺带告诉大脑的旁注
+        self._reports: list[_Report] = []   # 做完了还没说出口的任务结果，先到的在前
         self._direct: list[tuple[str, str]] = []   # 不经大脑、直接要说的话：（内容，说完后告诉大脑的旁注）
         self._cut: tuple[float, list[str], str] | None = None   # 被打断的时刻、没说完的句子、当时记的旁注
         self._filler_seq = 0
@@ -141,6 +181,7 @@ class Floor:
         self.voice_probe: Callable[[], Awaitable[object]] | None = None
         self._last_stall_line = -1e9
         self._brain_fails = 0          # 连续几轮大脑没答上来
+        self._redos = 0                # 连续几轮因为输出跑偏、什么都没说出来而重问
         if hasattr(brain, "on_retry"):
             brain.on_retry = self._brain_retrying
 
@@ -149,9 +190,9 @@ class Floor:
         if self.m.active:
             return
         self.m.reset()
-        self.pending.clear(); self.carry.clear(); self._direct.clear()
+        self.pending.clear(); self.carry.clear(); self._direct.clear(); self._reports.clear()
         self._nudge_ok, self._cut = False, None
-        self._pending_sid, self._restarts, self._early_cuts = None, 0, 0
+        self._pending_sid, self._restarts, self._early_cuts, self._redos = None, 0, 0, 0
         self.m.set_status("starting")      # 大脑预热要几秒
         warm = self._warm = asyncio.create_task(self._warm_up())
         done, _ = await asyncio.wait({warm}, timeout=self.start_wait)
@@ -230,6 +271,11 @@ class Floor:
             return None
 
         sid = self.m.speakers.by_name(speaker_name) if speaker_name else self.m.speakers.assign(embedding, seconds)
+        if speaker_name is None:
+            # 每句话留一行：多长、认成了谁、和每个人有多像。识别不准、同一个人被分成两位时靠它查
+            scores = sorted(self.m.speakers.last_scores.items(), key=lambda kv: -kv[1])[:3]
+            log.info("听到 [%s] %.1f秒｜%s｜声纹：%s", self.m.speakers.name_of(sid), seconds, text,
+                     "、".join(f"{n} {v:.2f}" for n, v in scores) or ("第一位" if embedding is not None else "太短，沿用上一位"))
         self.m.emit("speaker", speaker=self.m.speakers.speakers[sid].to_dict())
         line = self.m.add_line("human", text, sid, seconds if speaker_name is None else 0.0)
         self._nudge_ok = True
@@ -306,7 +352,7 @@ class Floor:
             self._direct.clear()
             self._cut = None
             await self._abort("mute")
-        elif self.pending:
+        elif self.pending or self._reports:
             self._wake.set()
 
     def say(self, text: str) -> None:
@@ -331,12 +377,13 @@ class Floor:
         from .fast_brain import ENGAGEMENT_NOTE
         self.carry.append(f"（主持人把你的参与度调成了：{ENGAGEMENT_NOTE[self.m.settings.engagement]}。）")
 
-    def dispatch(self, kind: str, brief: str) -> Task:
+    def dispatch(self, kind: str, brief: str, asker: int | None = None) -> Task:
+        """派一件后台任务。asker：会上是谁让查的（做完先向他汇报）；从界面派的不填。"""
         if kind not in TASK_KINDS:
             raise ValueError("没有这种任务")
         task = self.m.add_task(kind, brief)
         self.m.show_on_board(task.id)
-        t = asyncio.create_task(self._run_task(task))
+        t = asyncio.create_task(self._run_task(task, asker))
         self._bg.add(t)
         t.add_done_callback(self._bg.discard)
         return task
@@ -346,10 +393,10 @@ class Floor:
         while True:
             await self._wake.wait()
             self._wake.clear()
-            while self.m.active and not self.m.muted and (self._direct or self.pending):
+            while self.m.active and not self.m.muted and (self._direct or self.pending or self._reports):
                 if not self._direct:
                     await self._hear_them_out()      # 等的时候情况可能变了（被静音、有了直接要说的话），重新判断
-                    if not self._direct and (self.m.muted or not self.pending):
+                    if not self._direct and (self.m.muted or not (self.pending or self._reports)):
                         continue
                 att = _Attempt()
                 if self._early_cuts >= 2:
@@ -361,8 +408,15 @@ class Floor:
                     coro = self._speak_fixed(att, *self._direct.pop(0))
                 else:
                     self._cut = None       # 开始想新的了：更早被打断的那段不再续
-                    att.prompt = "\n".join(self.carry + self.pending)
+                    # 没人说话：这一轮只为把最早那件结果说出来。有人说话：欠着的结果都带上，他问到哪件就能答哪件
+                    att.report_only = bool(self._reports) and not any(p.startswith("[") for p in self.pending)
+                    att.reports = self._reports[:1] if att.report_only else list(self._reports)
+                    notes = [n for r in att.reports if (n := self._report_note(r, att.report_only))]
+                    att.heard = "\n".join(self.carry + self.pending)
+                    att.prompt = "\n".join(self.carry + notes + self.pending)
                     att.trigger_speaker, self._pending_sid = self._pending_sid, None
+                    if att.report_only and att.trigger_speaker is None:
+                        att.trigger_speaker = att.reports[0].asker     # 汇报是在回答当初让查的那个人
                     self.carry.clear(); self.pending.clear()
                     coro = self._think_and_speak(att)
                 self._attempt = att
@@ -370,6 +424,7 @@ class Floor:
                 await asyncio.wait({att.task})
                 if self._attempt is att:
                     self._attempt = None
+                self._settle_reports(att)
                 if not att.aborted:
                     self._restarts = 0
                     if att.order:
@@ -387,15 +442,17 @@ class Floor:
         想的全是半句话，还一次次作废。真人是等对方说完再接。但不能无限等：周围一直有声音时到点就开始想。
         """
         name = self.m.settings.name
-        named = any(p.startswith("[") and name in p for p in self.pending)
         start, heard = self.clock(), False
-        cap = self.listen_cap_named if named else self.listen_cap
         while self.m.active and not self._direct:
             self._speech_changed.clear()
+            # 手上只有要汇报的结果：有人正在说就等他说完（他那句话到了一起想），不急这两秒
+            report = not self.pending
+            named = any(p.startswith("[") and name in p for p in self.pending)
+            cap = self.give_up_after if report else self.listen_cap_named if named else self.listen_cap
             if self.m.humans_speaking:
                 heard = True
                 wait = start + cap - self.clock()
-            elif heard:
+            elif heard or report:
                 # 刚停下：那句话的文字还在识别，等它到了一起想
                 wait = self.asr_grace - (self.clock() - self._speech_end_at)
             else:
@@ -424,7 +481,7 @@ class Floor:
         if not n:
             return False
         if att.echo is None:
-            for line in att.prompt.splitlines():
+            for line in att.heard.splitlines():
                 if not line.startswith("["):
                     continue
                 heard = re.sub(r"[^\w一-鿿]", "", line.partition("]")[2]).lower()
@@ -460,7 +517,7 @@ class Floor:
 
     async def _think_and_speak(self, att: _Attempt) -> None:
         att.queue = asyncio.Queue()
-        filler = asyncio.create_task(self._fill_silence(att)) if self._addressed(att.prompt) else None
+        filler = asyncio.create_task(self._fill_silence(att)) if self._addressed(att.heard) else None
         try:
             await self._think(att)
         finally:
@@ -494,8 +551,13 @@ class Floor:
             for s in rest:
                 if not self._parroting(att, s, rs.prefixed):
                     self._plan(att, queue, s)
+            reply, derailed = self._vet(att, reply)
             if reply.dispatch and not self._real(att):
                 self._plan(att, queue, "我查一下。")      # 光派了工没出声：别人不知道它听到了
+            if derailed and not self._real(att):
+                self._ask_again(att)
+            elif not derailed:
+                self._redos = 0
             self.m.set_flag("brain_ok", True)
             self._brain_fails = 0
             log.info("大脑 首字%.1fs 共%.1fs｜听到：%s｜回答：%s", first or 0, self.clock() - t0,
@@ -518,7 +580,7 @@ class Floor:
         att.closed = True
         queue.put_nowait(None)
         if reply and reply.dispatch:
-            self._dispatch_from_brain(*reply.dispatch)   # 不等话说完就开工
+            self._dispatch_from_brain(*reply.dispatch, asker=att.trigger_speaker)   # 不等话说完就开工
         for old, new in (reply.names if reply else ()):
             self._name_speaker(old, new)
         if reply and reply.engagement:
@@ -527,7 +589,8 @@ class Floor:
             await speaker
         except _GiveUp:
             self._cancel(*att.synths)
-            if self._real(att):
+            att.gave_up = True
+            if self._real(att) and not att.report_only:      # 只为汇报的那一轮不用记：结果还欠着，会再找机会
                 self.carry.append("（一直有人在说话，你想说的那句没找到机会说出口。）")
         except asyncio.CancelledError:
             speaker.cancel()
@@ -537,11 +600,11 @@ class Floor:
     def _brain_failed(self, att: _Attempt) -> None:
         """这一轮大脑没答上来。有人在等回答：先自动再试，还不行就照实说，别让人干等；没人等就算了。"""
         said_something = any(x != self.stall_line and x not in self.fillers for x in att.planned)
-        if said_something or not self._addressed(att.prompt):
+        if said_something or not self._addressed(att.heard):
             return
         self._brain_fails += 1
         if self._brain_fails <= self.brain_retries:
-            self.pending.insert(0, att.prompt)
+            self.pending.insert(0, att.heard)        # 能走到这里说明有人点了它的名，heard 不会是空的
             if self._pending_sid is None:
                 self._pending_sid = att.trigger_speaker
             self.carry.append("（刚才网络断了一下，下面的话你还没回应。）")
@@ -558,7 +621,7 @@ class Floor:
         # 只在确实有人在等它时才出声：被叫了名字，或者半分钟内它刚说过话（正在对话中）。
         # 否则背景里随便一句话都会引出一句「我网络卡了」
         in_talk = any(now - ts < 30 for ts, _ in self._recent_bot)
-        wanted = att is not None and (self.m.settings.name in att.prompt or in_talk)
+        wanted = att is not None and (self.m.settings.name in att.heard or in_talk)
         if (att and wanted and att.queue is not None and att.trigger_speaker is not None and not att.aborted
                 and not att.planned and now - self._last_stall_line > self.stall_line_every):
             self._last_stall_line = now
@@ -569,6 +632,8 @@ class Floor:
         new = re.sub(r"[：:、\s]+", " ", new).strip()[:12]      # 名字会原样写进会议记录：不留换行和分隔符
         if not re.fullmatch(r"说话人\d+", old) or not new or re.fullmatch(r"说话人\d+", new) or new == self.m.settings.name:
             return
+        if not re.search(r"[A-Za-z一-鿿]", new):
+            return                                   # 「?」「？？」：它拿不准时写的，不是名字
         book = self.m.speakers
         if any(sp.name == new for sp in book.speakers.values()):
             return                                   # 已经有人叫这个名字了，多半是认错
@@ -578,12 +643,111 @@ class Floor:
                 log.info("认出 %s 是 %s", old, new)
                 return
 
-    def _dispatch_from_brain(self, kind: str, brief: str) -> None:
-        # 大脑重新组织发言时可能重复派同一件事，正在做的就不再派
+    def _vet(self, att: _Attempt, reply: Reply) -> tuple[Reply, bool]:
+        """大脑这一轮的标记哪些作数。返回（只留下作数标记的回答，这一轮是不是跑偏了）。
+
+        念什么不归这里管（自言自语在 ReplyStream 里就没交出来），这里只管标记：派工、参与度、称呼。
+        """
+        derailed = reply.selftalk
+        if reply.selftalk:
+            # 夹了自言自语：实测它多半正是在反悔刚写下的标记（"I shouldn't dispatch anything here"），一律不算
+            if reply.dispatch or reply.engagement or reply.names:
+                log.warning("大脑的输出里夹了自言自语，这一轮的标记不作数：%s", (reply.dispatch, reply.engagement, reply.names))
+            reply = replace(reply, dispatch=None, engagement=None, names=())
+        if reply.dispatch:
+            brief, said = reply.dispatch[1], "".join(self._real(att))
+            if len(re.sub(r"[^\w一-鿿]", "", brief)) < 2 or _NOT_A_TASK.search(brief):
+                log.warning("大脑派了一件不是任务的任务，不派：%s", reply.dispatch)
+                reply, derailed = replace(reply, dispatch=None), True
+            elif _REFUSES.search(said):
+                log.warning("大脑嘴上说不查却派了工，不派：%s｜说的是：%s", reply.dispatch, said[:40])
+                reply = replace(reply, dispatch=None)
+        if reply.engagement and not any(_ENGAGE_CUES.search(x) for x in self._unanswered(att)):
+            log.warning("没人提它话多话少，大脑却要改参与度（%s），不改", reply.engagement)
+            reply = replace(reply, engagement=None)
+        return reply, derailed
+
+    def _unanswered(self, att: _Attempt) -> list[str]:
+        """这一轮听到的话，加上它上次开口之后别人说的话（重想过几次时，前面那几句不在这一轮的 heard 里）。"""
+        out = [l for l in att.heard.splitlines() if l.startswith("[")]
+        for line in reversed(self.m.lines[-8:]):
+            if line is att.line:
+                continue                 # 这一轮自己刚开口的那句
+            if line.who == "bot":
+                break
+            if line.who == "human":
+                out.append(line.text)
+        return out
+
+    def _ask_again(self, att: _Attempt) -> None:
+        """这一轮跑偏了，拦下来之后一句正经话都没剩。有人点了它的名在等：原话再问一次（只一次）；没人等就算了。"""
+        if self._redos or not self._addressed(att.heard):
+            self._redos = 0
+            return
+        self._redos += 1
+        self.pending.insert(0, att.heard)
+        if self._pending_sid is None:
+            self._pending_sid = att.trigger_speaker
+        self.carry.append("（你上一轮的输出不合格式，没有念出来，里面的标记也没有生效。下面的话你还没回应，"
+                          "现在只输出要对他说的那一句。）")
+
+    def _dispatch_from_brain(self, kind: str, brief: str, asker: int | None = None) -> None:
+        # 大脑重新组织发言时可能重复派同一件事：正在做的、做完了结果还没说出口的，都不再派
+        owed = {id(r.task) for r in self._reports}
         for t in self.m.tasks:
-            if t.status == "running" and t.kind == kind and similar(t.brief, brief) > 0.5:
+            if t.kind == kind and similar(t.brief, brief) > 0.5 and (t.status == "running" or id(t) in owed):
                 return
-        self.dispatch(kind, brief)
+        self.dispatch(kind, brief, asker)
+
+    # ================= 把查完的结果说出口 =================
+    def _report_note(self, r: _Report, only: bool) -> str:
+        """这一轮怎么把任务结果交给大脑。only：没有人在说话，这一轮只为汇报。"""
+        what = f"{r.task.kind}：{r.task.brief}"
+        if not r.ok:
+            if r.touched and not only:
+                return ""
+            ask = "现在简短告诉大家，不要输出 [静]。" if only and not r.touched else "还没告诉大家的话，简短说一声。"
+            return f"（后台任务没做成｜{what}｜原因：{r.text[:200]}。{ask}）"
+        if not r.seen:
+            head = f"（后台任务完成｜{what}）\n{r.text[:1800]}\n"
+            if only:
+                return head + ("（这是你派出去的活，问的人在等。现在就用口语把结论说出来，两三句；完整内容已经显示在你的屏幕上。"
+                               "时机不用你挑：有人在说话时会等他说完再替你念。不要输出 [静]。）")
+            return head + ("（这是你派出去的活，结果出来了，完整内容已经显示在你的屏幕上。下面有人在说话："
+                           "他问的就是这件事，直接说结论，两三句；不是，就先回应他，这个结论可以接着说，也可以留到下一轮。）")
+        head = f"（「{what[:80]}」的结果还没告诉大家：{r.text[:300]}）"
+        if not only:
+            return "" if r.touched else head        # 多半已经讲过了：别再提醒，免得它重复；等没人说话时让它自己确认
+        if r.touched:
+            return head + "\n（你刚才答话时已经把这个结论讲给大家了，就只输出 [静]；还没讲，现在用口语讲，两三句。）"
+        return head + "\n（问的人还在等。现在就用口语把结论说出来，两三句。不要输出 [静]。）"
+
+    def _settle_reports(self, att: _Attempt) -> None:
+        """一轮发言结束：它带着的任务结果，哪些算说出口了，哪些接着欠着。"""
+        said = "".join(x for x in att.spoken() if x != self.stall_line and x not in self.fillers)
+        quiet = att.task is not None and not att.task.cancelled() and not att.aborted and not att.gave_up and not said
+        for r in att.reports:
+            if r not in self._reports:
+                continue
+            r.seen = r.seen or att.sent
+            if att.aborted == "hush":
+                self._reports.remove(r)              # 主持人让它停下：这件事不再追着说，结果在屏幕上
+            elif att.report_only:
+                if said or (quiet and r.touched):    # 说了；或者它确认刚才答话时已经讲过
+                    self._reports.remove(r)
+                elif att.gave_up:
+                    r.missed += 1
+                    if r.missed >= self.report_tries:
+                        self._reports.remove(r)
+                        self.carry.append(f"（「{r.task.kind}：{r.task.brief[:60]}」的结果一直没找到机会说，有人问起再讲。）")
+                elif quiet:
+                    r.silent += 1
+                    if r.silent >= self.report_asks:   # 问了几次都不出声：系统替它说一句，至少让人知道有结果了
+                        self._reports.remove(r)
+                        line = (self.report_ready if r.ok else self.report_failed).format(kind=r.task.kind)
+                        self._direct.append((line, "（你一直没开口，系统替你说了：「{said}」有人要听再讲细节。）"))
+            elif said and (mentions(said, r.text) if r.ok else True):
+                r.touched = True                     # 答别人时好像讲到了：下一轮让它自己确认，不逼它重复
 
     async def _speak_fixed(self, att: _Attempt, text: str, note: str = "") -> None:
         sp = SentenceSplitter()
@@ -715,7 +879,8 @@ class Floor:
             early = self.clock() - att.speak_started < self.early_cut
             self._early_cuts = self._early_cuts + 1 if early else 0
         if not att.sent and att.prompt:
-            self.pending.insert(0, att.prompt)   # 还没送进大脑，放回去下次一起送
+            if att.heard:
+                self.pending.insert(0, att.heard)   # 还没送进大脑，放回去下次一起送（任务结果另外欠着，不用放）
             if self._pending_sid is None:
                 self._pending_sid = att.trigger_speaker
         else:
@@ -788,7 +953,7 @@ class Floor:
             self._wake.set()
 
     # ================= 后台任务 =================
-    async def _run_task(self, task: Task) -> None:
+    async def _run_task(self, task: Task, asker: int | None = None) -> None:
         if self.worker is None:
             res = WorkResult(False, "这台机器上没有配置干活的能力")
         else:
@@ -807,15 +972,7 @@ class Floor:
         self.m.update_task(task, status="done" if res.ok else "failed",
                            result=res.text, artifact=res.artifact, progress="")
         self.m.show_on_board(task.id)
-        if res.ok:
-            self.pending.append(
-                f"（后台任务完成｜{task.kind}：{task.brief}）\n{res.text[:1800]}\n"
-                "（请挑个空档用口语向大家汇报，先说结论，两三句话；完整内容已经显示在你的屏幕上。和现在聊的无关了就一句话带过。）"
-            )
-        else:
-            self.pending.append(
-                f"（后台任务没做成｜{task.kind}：{task.brief}｜原因：{res.text[:200]}。请简短告诉大家。）"
-            )
+        self._reports.append(_Report(task, res.text, res.ok, asker))     # 说出口之前一直欠着，见 _settle_reports
         self._wake.set()
 
     # ================= 小工具 =================

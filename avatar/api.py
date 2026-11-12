@@ -9,12 +9,14 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, PlainTextResponse
+from urllib.parse import urlsplit
+
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import knowledge, models
+from . import connect, knowledge, mcp_server, models
 from .archive import NO_CONTENT, Archive, dialogue_of, split_minutes
 from .config import DESIGN_DIR, ENGAGEMENTS, ROLES, SCENES, VOICES, Settings
 from .ears import Ears
@@ -28,9 +30,22 @@ from .textutil import TASK_KINDS
 log = logging.getLogger("avatar.api")
 MINUTES_MIN_LINES = 3     # 别人至少说了这么多句，结束时才自动整理纪要
 BACKFILL = 10             # 启动时最多给这么多场没有纪要的旧会补纪要
+MIC_SILENT_AFTER = 3.0    # 形象页连着、麦克风的声音却这么多秒没送来，就算它听不到了（正常每 40 毫秒一包）
 WEB = Path(__file__).parent / "web"
 FIGURES = WEB / "models"  # 3D 形象文件：<名字>.glb，另可带 <名字>.<状态>.glb 作为那种状态的动作
 POSES = ("off", "starting", "listening", "thinking", "waiting", "speaking")
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def from_another_site(origin: str | None) -> bool:
+    """这个请求是不是别的网站的页面发来的。
+
+    浏览器发请求会带上页面所在的网站（Origin）；命令行和智能体不带。会议记录只给本机的程序读，
+    不给你碰巧打开的某个网页读——包括把自己的域名指到 127.0.0.1 来冒充本机的那种。
+    """
+    if origin is None:
+        return False
+    return (urlsplit(origin).hostname or "") not in LOCAL_HOSTS
 
 
 def list_figures(folder: Path) -> list[dict]:
@@ -91,10 +106,11 @@ class Hub:
     """把所有部件装到一起。测试时可以换成假部件。"""
 
     def __init__(self, settings: Settings | None = None, brain=None, mouth=None, worker=None,
-                 save_settings: bool = True, archive: Archive | None = None):
+                 save_settings: bool = True, archive: Archive | None = None, agents=None):
         self.settings = settings or Settings.load()
         self.save_settings = save_settings
         self.archive = archive or Archive()
+        self.agents = agents or connect.Connector()     # 把会议记录登记给本机的 Claude Code / Codex
         self.meeting = Meeting(self.settings, self.archive)
         self.player = StagePlayer()
         self.mouth = mouth or Mouth(self.settings)
@@ -313,6 +329,47 @@ class Hub:
             self.mouth.close()
 
 
+class MicWatch:
+    """盯着一个形象页的麦克风声音有没有在送来。
+
+    耳机断开、麦克风被系统收走时，页面和后台的连接还在，只是不再有声音数据。这时要把状态里的
+    mic_online 改成假（界面和 Agent 靠它知道「连着但听不到」），并清掉耳朵里说到一半的残留。
+    """
+
+    def __init__(self, hub: Hub, ws: WebSocket):
+        self.hub, self.ws = hub, ws
+        self.last = time.monotonic()        # 刚接通时页面还在开麦克风，先当它有声音
+        self._set(True)
+        self._task = asyncio.create_task(self._watch())
+
+    def _mine(self) -> bool:
+        return self.hub.player.ws is self.ws    # 被别的窗口顶替之后，就不归这个连接说了算
+
+    def _set(self, online: bool) -> None:
+        m = self.hub.meeting
+        if not self._mine() or m.mic_online == online:
+            return
+        m.set_flag("mic_online", online)
+        if m.active:
+            log.info("麦克风的声音又送来了" if online else "麦克风没有声音送来了，它现在听不到")
+        if not online and self.hub.ready["ears"]:
+            self.hub.ears.reset()
+
+    def heard(self) -> None:
+        self.last = time.monotonic()
+        self._set(True)
+
+    async def _watch(self) -> None:
+        while True:
+            await asyncio.sleep(MIC_SILENT_AFTER / 3)
+            if time.monotonic() - self.last > MIC_SILENT_AFTER:
+                self._set(False)
+
+    def close(self) -> None:
+        self._task.cancel()
+        self._set(False)
+
+
 # ---------- 请求体 ----------
 class UtteranceIn(BaseModel):
     speaker: str = Field(min_length=1, max_length=30)
@@ -338,6 +395,10 @@ class TaskIn(BaseModel):
 
 class BoardIn(BaseModel):
     task_id: int | None = None
+
+
+class AgentIn(BaseModel):
+    connected: bool
 
 
 def create_app(hub: Hub | None = None) -> FastAPI:
@@ -434,6 +495,47 @@ def create_app(hub: Hub | None = None) -> FastAPI:
             raise HTTPException(404, "没有这场会议的记录")
         return {"id": meeting_id, "state": "running"}
 
+    # ---------- 接给我的智能体 ----------
+    @app.get("/api/agents")
+    async def get_agents(request: Request):
+        """会议记录接给了哪些智能体，以及别的智能体怎么接（guide 是写给智能体看的一段话）。"""
+        base = str(request.base_url).rstrip("/")
+        clients = await asyncio.to_thread(h().agents.clients)      # 要起子进程去问，不能卡住正在开的会
+        return {"clients": clients, "guide": connect.guide(base),
+                "mcp": {"url": f"{base}/mcp", "command": connect.SERVER}, "api": f"{base}/api/meetings"}
+
+    @app.put("/api/agents/{client_id}")
+    async def set_agent(client_id: str, body: AgentIn):
+        """把会议记录接给这个智能体（Claude Code、Codex），或者取消。"""
+        hub = h()
+        if client_id not in connect.CLIENTS:
+            raise HTTPException(404, "没有这个智能体")
+        try:
+            await asyncio.to_thread(hub.agents.set, client_id, body.connected)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        clients = await asyncio.to_thread(hub.agents.clients)
+        hub.meeting.emit("agents", clients=clients)
+        return {"clients": clients}
+
+    @app.post("/mcp", include_in_schema=False)
+    async def mcp(request: Request):
+        """HTTP 方式的 MCP：和 mcp_server.py 是同一套只读工具，给不方便拉起本地命令的智能体用。"""
+        if from_another_site(request.headers.get("origin")):
+            raise HTTPException(403, "会议记录只给这台电脑上的程序读")
+        try:
+            msg = await request.json()
+        except ValueError:
+            return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "不是合法的 JSON"}}, 400)
+        hub = h()
+        if hub.meeting.active:
+            hub.meeting.save()      # 正在开的这场：先把还没落盘的写下去，读到的就是最新的
+        batch = msg if isinstance(msg, list) else [msg]
+        replies = [r for m in batch if (r := await asyncio.to_thread(mcp_server.respond, m, hub.archive)) is not None]
+        if not replies:
+            return Response(status_code=202)       # 只有通知，没有要回的
+        return JSONResponse(replies if isinstance(msg, list) else replies[0])
+
     @app.post("/api/utterance")
     async def utterance(body: UtteranceIn):
         """以文字方式注入一句与会者发言（没有麦克风时、测试时、AI Agent 参会时用）。"""
@@ -520,12 +622,14 @@ def create_app(hub: Hub | None = None) -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
         hub.meeting.set_flag("stage_online", True)
+        mic = MicWatch(hub, ws)
         try:
             while True:
                 msg = await ws.receive()
                 if msg["type"] == "websocket.disconnect":
                     break
                 if msg.get("bytes") is not None:
+                    mic.heard()
                     if hub.meeting.active:
                         hub.ears.feed(msg["bytes"])
                 elif msg.get("text"):
@@ -540,10 +644,9 @@ def create_app(hub: Hub | None = None) -> FastAPI:
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:
+            mic.close()
             if hub.player.ws is ws:
                 hub.player.ws = None
                 hub.meeting.set_flag("stage_online", False)
-                if hub.ready["ears"]:
-                    hub.ears.reset()
 
     return app

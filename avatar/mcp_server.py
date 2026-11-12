@@ -2,6 +2,7 @@
 
 它直接读 workspace/meetings/ 里的文件，不依赖后台是否在运行，正在开的会也读得到（最多落后一秒）。
 只用标准库，启动快；由 AI 客户端按需拉起，注册方法见 `python -m avatar.connect`。
+后台开着时，同一套工具也能用 HTTP 访问（api.py 的 POST /mcp），给不方便拉起本地命令的智能体用。
 """
 from __future__ import annotations
 
@@ -155,6 +156,18 @@ def handle(msg: dict, archive: Archive) -> dict | None:
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"不支持 {method}"}}
 
 
+def respond(msg, archive: Archive) -> dict | None:
+    """处理一条消息，出什么错都回一条 JSON-RPC 错误：一条坏请求不能让整个服务退出。标准输入输出和 HTTP 两种接法共用。"""
+    if not isinstance(msg, dict):
+        return None
+    try:
+        return handle(msg, archive)
+    except Exception as e:  # noqa: BLE001
+        mid = msg.get("id")
+        return None if mid is None else {
+            "jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"处理这条请求时出错：{e}"}}
+
+
 def main() -> None:
     archive = Archive()
     for raw in sys.stdin:
@@ -165,12 +178,7 @@ def main() -> None:
             msg = json.loads(raw)
         except ValueError:
             continue
-        try:
-            reply = handle(msg, archive) if isinstance(msg, dict) else None
-        except Exception as e:  # noqa: BLE001  一条坏请求不能让整个服务退出
-            mid = msg.get("id") if isinstance(msg, dict) else None
-            reply = None if mid is None else {
-                "jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": f"处理这条请求时出错：{e}"}}
+        reply = respond(msg, archive)
         if reply is not None:
             sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
             sys.stdout.flush()

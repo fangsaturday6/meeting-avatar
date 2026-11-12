@@ -16,7 +16,8 @@ PANEL_IDS = ["panel", "tab-notes", "tab-settings", "alerts", "btn-meetings", "ta
              "say-text", "btn-send", "composer-error", "meetings", "reader", "reader-title", "reader-sub", "btn-reader-close",
              "btn-minutes", "btn-copy-path", "reader-body", "settings", "engagement", "set-topic", "set-role", "open-book-row",
              "set-open-book", "set-scene", "set-project", "set-projects-root", "projects-count", "set-name", "set-owner",
-             "set-voice", "set-speed", "set-skills", "mic-select", "speaker-select", "settings-error"]
+             "set-voice", "set-speed", "set-skills", "mic-select", "speaker-select", "settings-error",
+             "agents", "agent-claude", "agent-codex", "btn-copy-agent-guide", "agents-error"]
 
 
 @pytest.fixture
@@ -70,7 +71,7 @@ def test_every_page_action_has_an_api():
     """api.js 里的每个操作都对应一个后台接口。"""
     from pathlib import Path
     src = (Path(demo.__file__).parent / "web" / "api.js").read_text(encoding="utf-8")
-    called = set(re.findall(r"call\('(GET|POST|PATCH)', [`']([^`'$]+)", src))
+    called = set(re.findall(r"call\('(GET|POST|PATCH|PUT)', [`']([^`'$]+)", src))
     routes = {(m, r.path) for r in create_app(demo.DemoHub()).routes for m in getattr(r, "methods", None) or []}
     # 带参数的地址（/api/meetings/{id}/minutes）在 api.js 里只写到参数之前，所以按开头比
     missing = {(m, p) for m, p in called if not any(rm == m and rp.split("{")[0] == p or rm == m and rp == p for rm, rp in routes)}
@@ -91,3 +92,13 @@ def test_demo_meeting_runs_without_models(client, tmp_path):
     assert task["artifact"] == f"/designs/demo-{task['id']}/index.html"
     assert (tmp_path / f"demo-{task['id']}" / "index.html").exists()
     assert client.post("/api/meeting/stop").json()["status"] == "off"
+
+
+def test_every_connectable_agent_has_its_own_switch(client):
+    """能一键登记的智能体，设置窗口里各有一个开关，名字是「agent-编号」；演示后台里拨它不碰真实配置。"""
+    from avatar import connect
+    html = client.get("/panel").text
+    assert {f"agent-{cid}" for cid in connect.CLIENTS} <= ids(html)
+    assert set(re.findall(r'data-agent="([^"]+)"', html)) == set(connect.CLIENTS)
+    assert [c["state"] for c in client.get("/api/agents").json()["clients"]] == ["off", "missing"]
+    assert client.put("/api/agents/claude", json={"connected": True}).json()["clients"][0]["state"] == "on"

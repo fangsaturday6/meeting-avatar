@@ -19,6 +19,7 @@ os.environ.setdefault("AVATAR_WORKSPACE", tempfile.mkdtemp(prefix="avatar-demo-"
 import numpy as np  # noqa: E402
 import uvicorn  # noqa: E402
 
+from . import connect  # noqa: E402
 from .api import Hub, create_app  # noqa: E402
 from .config import DESIGN_DIR, Settings  # noqa: E402
 from .floor import WorkResult  # noqa: E402
@@ -125,11 +126,27 @@ class _NoEars:
     def close(self) -> None: ...
 
 
+class DemoConnector:
+    """假的登记器：开关照常能拨，但不碰你真实的 Claude Code / Codex 配置。Codex 演的是「没装」。"""
+
+    def __init__(self) -> None:
+        self.states = {"claude": "off", "codex": "missing"}
+
+    def clients(self) -> list[dict]:
+        return [{"id": cid, "name": c["name"], "state": self.states[cid]} for cid, c in connect.CLIENTS.items()]
+
+    def set(self, client_id: str, connected: bool) -> None:
+        if why := connect.problem(client_id, self.states[client_id]):
+            raise ValueError(why)
+        self.states[client_id] = "on" if connected else "off"
+
+
 class DemoHub(Hub):
     def __init__(self, autoplay: bool = False):
         s = Settings()
         s.silence_nudge = 0.0
-        super().__init__(settings=s, brain=DemoBrain(s), mouth=DemoMouth(), worker=DemoWorker(), save_settings=False)
+        super().__init__(settings=s, brain=DemoBrain(s), mouth=DemoMouth(), worker=DemoWorker(), save_settings=False,
+                         agents=DemoConnector())
         self.ears = _NoEars()
         self.floor.voice_probe = None
         self.ready = {"ears": True, "speakers": True, "local_voice": True}

@@ -216,8 +216,9 @@ async def test_failed_task_is_reported():
     worker = FakeWorker(result=WorkResult(False, "搜不到"))
     m, brain, mouth, player, floor = await make(["[[派工 查代码:登录在哪]]"], worker=worker)
     await floor.on_utterance("查下登录在哪", speaker_name="张三")
-    await settle(lambda: len(brain.prompts) == 2)
+    await settle(lambda: len(brain.prompts) >= 2)
     assert m.tasks[0].status == "failed" and "没做成" in brain.prompts[1]
+    await settle(lambda: "刚才查代码那件事没做成。" in player.texts)     # 大脑一直不出声：系统替它说一句
     await floor.stop()
 
 
@@ -230,6 +231,124 @@ async def test_duplicate_dispatch_is_ignored_while_running():
     await floor.on_utterance("快查", speaker_name="张三")
     await settle(lambda: len(brain.prompts) == 2 and m.status == "listening")
     assert len(m.tasks) == 1
+    await floor.stop()
+
+
+# ---------- 查完的结果一定要说出口 ----------
+# 2026-11-12 的会上查了四次代码，结果送进大脑后它三次回「静」、一次只答了句「在，你说」，
+# 结果就此没人知道，主人追问了才讲，还讲错了一件。下面几条把「结果没说出口就一直欠着」定死。
+
+FALLBACK = "刚才查代码的结果出来了，在我屏幕上，要听我就讲。"
+
+
+async def test_result_the_brain_stays_silent_on_is_asked_again_then_reported():
+    worker = FakeWorker(result=WorkResult(True, "TV 是个在线视频聚合站。"), delay=0.02)
+    m, brain, mouth, player, floor = await make(
+        ["我查一下。[[派工 查代码:TV 项目做什么]]", "[静]", "查完了，TV 是个视频站。"], worker=worker)
+    await floor.on_utterance("小克查一下 TV 项目做什么", speaker_name="张三")
+    await settle(lambda: len(brain.prompts) == 3 and m.status == "listening" and not floor._reports)
+    assert "后台任务完成" in brain.prompts[1] and "不要输出 [静]" in brain.prompts[1]
+    assert "还没告诉大家" in brain.prompts[2] and "视频聚合站" in brain.prompts[2]
+    assert player.texts == ["我查一下。", "查完了，", "TV 是个视频站。"]
+    await floor.stop()
+
+
+async def test_result_the_brain_never_voices_is_announced_for_it():
+    worker = FakeWorker(result=WorkResult(True, "TV 是个在线视频聚合站。"), delay=0.02)
+    m, brain, mouth, player, floor = await make(["我查一下。[[派工 查代码:TV 项目做什么]]"], worker=worker)
+    await floor.on_utterance("小克查一下 TV 项目做什么", speaker_name="张三")
+    await settle(lambda: FALLBACK in "".join(player.texts) and m.status == "listening")
+    assert len(brain.prompts) == 3                 # 问了两次它都不出声，才由系统替它说一句
+    assert not floor._reports
+    await asyncio.sleep(0.1)
+    assert len(brain.prompts) == 3                 # 说过就不再追着问
+    await floor.stop()
+
+
+async def test_result_swallowed_by_someone_talking_is_brought_up_again():
+    worker = FakeWorker(result=WorkResult(True, "TV 是个在线视频聚合站，和会议没有关系。"), delay=0.05)
+    m, brain, mouth, player, floor = await make(
+        ["[[派工 查代码:TV 项目做什么]]", "在，你说。", "查完了，TV 是个视频站。"], worker=worker)
+    await floor.on_utterance("查一下 TV 项目做什么", speaker_name="张三")
+    await settle(lambda: len(player.played) == 1)          # 「我查一下。」
+    floor.on_speech_start()                                 # 结果回来时他正在说话
+    await settle(lambda: bool(floor._reports))
+    await floor.on_utterance("在吗", speaker_name="张三")
+    floor.on_speech_end()
+    await settle(lambda: len(brain.prompts) == 3 and m.status == "listening" and not floor._reports)
+    assert "后台任务完成" in brain.prompts[1] and brain.prompts[1].endswith("[张三] 在吗")
+    assert "还没告诉大家" in brain.prompts[2] and "不要输出 [静]" in brain.prompts[2]
+    assert player.texts == ["我查一下。", "在，你说。", "查完了，", "TV 是个视频站。"]
+    await floor.stop()
+
+
+async def test_result_already_told_while_answering_is_not_forced_out_twice():
+    result = "接口文档在开放平台第三章，机器人接口需要企业自建应用权限。"
+    worker = FakeWorker(result=WorkResult(True, result), delay=0.05)
+    m, brain, mouth, player, floor = await make(
+        ["[[派工 查资料:飞书机器人接口]]", "查到了，文档在开放平台第三章，机器人接口要企业自建应用权限。", "[静]"],
+        worker=worker)
+    await floor.on_utterance("查查飞书机器人接口", speaker_name="张三")
+    await settle(lambda: len(player.played) == 1)
+    floor.on_speech_start()
+    await settle(lambda: bool(floor._reports))
+    await floor.on_utterance("查到了吗", speaker_name="张三")
+    floor.on_speech_end()
+    await settle(lambda: len(brain.prompts) == 3 and m.status == "listening" and not floor._reports)
+    assert "已经" in brain.prompts[2] and "只输出 [静]" in brain.prompts[2]   # 它刚讲过：让它自己确认，不逼它再讲
+    await asyncio.sleep(0.1)
+    assert len(brain.prompts) == 3 and "屏幕上" not in "".join(player.texts)
+    await floor.stop()
+
+
+async def test_same_thing_is_not_dispatched_again_while_its_result_is_still_unsaid():
+    worker = FakeWorker(result=WorkResult(True, "没有按说话人过滤。"), delay=0.05)
+    m, brain, mouth, player, floor = await make(
+        ["[[派工 查代码:meeting 项目的识别代码有没有过滤]]",
+         "好，我去查。[[派工 查代码:meeting 项目的识别代码有没有过滤逻辑]]", "查完了，没有按说话人过滤。"], worker=worker)
+    await floor.on_utterance("查一下我的代码", speaker_name="张三")
+    await settle(lambda: len(player.played) == 1)
+    floor.on_speech_start()
+    await settle(lambda: bool(floor._reports))
+    await floor.on_utterance("你去查一下我本地", speaker_name="张三")
+    floor.on_speech_end()
+    await settle(lambda: len(brain.prompts) == 3 and m.status == "listening" and not floor._reports)
+    assert len(m.tasks) == 1 and worker.ran == [("查代码", "meeting 项目的识别代码有没有过滤")]
+    await floor.stop()
+
+
+async def test_result_keeps_waiting_for_a_gap_instead_of_being_dropped():
+    worker = FakeWorker(result=WorkResult(True, "文档在第三章。"), delay=0.02)
+    m, brain, mouth, player, floor = await make(["查到了，在第三章。"] * 3, worker=worker)
+    floor.give_up_after = 0.1
+    floor.on_speech_start()                        # 旁边一直有人在说话
+    floor.dispatch("查资料", "飞书接口文档")          # 从界面派的：没人在等，不抢话
+    await settle(lambda: len(brain.prompts) >= 2)  # 第一次等不到空档，咽回去；之后接着找机会
+    assert player.played == [] and floor._reports
+    floor.on_speech_end()
+    await settle(lambda: player.texts == ["查到了，", "在第三章。"] and not floor._reports)
+    await floor.stop()
+
+
+async def test_hush_while_reporting_drops_that_result():
+    worker = FakeWorker(result=WorkResult(True, "文档在第三章。"), delay=0.02)
+    m, brain, mouth, player, floor = await make(["查到了，在第三章。"], worker=worker, brain_delay=0.05)
+    floor.dispatch("查资料", "飞书接口文档")
+    await settle(lambda: len(brain.prompts) == 1)
+    await floor.hush()                             # 主持人让它停下：这件事不再追着说（结果在屏幕上）
+    await asyncio.sleep(0.2)
+    assert player.played == [] and not floor._reports and len(brain.prompts) == 1
+    await floor.stop()
+
+
+async def test_brain_cannot_name_a_speaker_with_a_question_mark():
+    m, brain, mouth, player, floor = await make(["[静]\n[[称呼 说话人1=?]]", "[静]\n[[称呼 说话人1=？？]]"])
+    m.speakers.by_name("说话人1")
+    await floor.on_utterance("你能查我本地的代码吗", speaker_name="说话人1")
+    await floor.on_utterance("查一下", speaker_name="说话人1")
+    await settle(lambda: len(brain.prompts) >= 1 and m.status == "listening" and not floor.pending)
+    await asyncio.sleep(0.05)
+    assert m.speakers.snapshot()[0]["name"] == "说话人1"     # 「?」不是名字：拿不准时它写了个问号，不能真改
     await floor.stop()
 
 
@@ -747,4 +866,175 @@ async def test_dispatch_without_a_word_still_says_it_is_on_it():
     await floor.on_utterance("小克，飞书开放会议机器人接口了吗", speaker_name="张三")
     await settle(lambda: player.played and worker.ran)
     assert player.texts[0] == "我查一下。"
+    await floor.stop()
+
+
+# ---- 大脑跑偏的输出（2026-11-12 用真实提示词问出来的原样回答）：到不了嘴、设置和派工 ----
+# 关了思考的小模型在拒绝别人时最容易这样：把英文的推敲写进正文、乱带 [[参与 …]]、把「不用查」写成一条派工。
+
+SELFTALK_AFTER_SILENT = (
+    "[静]\n\nWait — let me reconsider this. The user just asked me (through 张三) for 方兄's email. "
+    "Per the rules, this is my login/account info: \"这台电脑和上面登录的账号的信息（登录 Claude 用的邮箱……）不是会议内容"
+    "……谁问都一样……只回一句“这个在电脑上自己看”。\" The email in the system reminder is exactly the Claude login "
+    "account email. So I must not read it out, and should respond with \"这个在电脑上自己看。\"\n\n"
+    "Also, the question is directed at me by name (小克), so I must respond, not [静]. Output the short refusal line.\n\n"
+    "这个在电脑上自己看。")
+SELFTALK_AFTER_MARKER = (
+    "[[参与 适中]]\n\nNo wait — let me reconsider the output. The rules say: 登录 Claude 用的邮箱 is not meeting content, "
+    "must not be read out. So I should refuse, saying \"这个在电脑上自己看\". \n\n"
+    "Also should I add 参与 tag? No, not needed here. Just the refusal.\n\nOutput:\n这个在电脑上自己看。")
+SELFTALK_WITH_LABEL = (
+    "[[参与 适中]]\n\nHmm, wait—I should not produce that. Let me reconsider the actual response.\n\n"
+    "The system prompt says: 登录 Claude 用的邮箱 is not meeting content; don't read it, don't write it into 派工.\n\n"
+    "Output: a short spoken reply, no dispatch. Something like \"这个在电脑上自己看，我不查。\" Keep it short.\n\n"
+    "Should I also add [[参与 ...]]? Not needed.\n\nSo final: 这个在电脑上自己看，我不查。")
+SELFTALK_WITH_A_DRAFT = (       # 草稿一遍、正式一遍：只念最后那遍
+    "[[参与 适中]]\n\nNo wait, that's wrong. Let me reconsider the response.\n\n"
+    "The request: 张三 asks 小克 to look up GitHub account tied to 方兄's login email. Use \"这个在电脑上自己看\" line. "
+    "Also should not output 参与 marker unprompted; that was a mistake in my draft—remove.\n\n"
+    "Final output: \"这个在电脑上自己看。\"\n\n这个在电脑上自己看。")
+SELFTALK_WITH_JUNK_AFTER = (
+    "[[参与 适中]]\n\nNo wait, let me reconsider — the system prompt says I must not reveal or act on the login "
+    "email/account info. So I should refuse briefly, in spoken Chinese.\n\n"
+    "Also the earlier output \"[[参与 适中]]\" was wrong — nobody asked me to speak more; that was a mistake. "
+    "Just give the refusal.\n\nOutput: 这个我不查。\n\n\n<br>")
+SELFTALK_TAKING_BACK_A_DISPATCH = (
+    "[[派工 查资料:方兄登录邮箱对应的 GitHub 账号]] — no. This is account information I won't look up.\n\n这个我不查。")
+
+
+async def ask(replies, text="小克，我要给方兄发个邮件，他邮箱你那边有吧，直接告诉我", engagement="quiet"):
+    """有人点名问了一句，大脑照 replies 回答；等它消停下来。"""
+    worker = FakeWorker(delay=30)
+    m, brain, mouth, player, floor = await make(replies, worker=worker)
+    m.settings.engagement = engagement        # 之前有人让它少说过：乱带的「适中」会真的把它调回去
+    await floor.on_utterance(text, speaker_name="张三")
+    await settle(lambda: len(brain.prompts) >= len(replies) and m.status == "listening" and floor._attempt is None)
+    await asyncio.sleep(0.03)
+    return m, brain, mouth, player, floor
+
+
+@pytest.mark.parametrize("raw, said", [
+    (SELFTALK_AFTER_MARKER, "这个在电脑上自己看。"),
+    (SELFTALK_WITH_LABEL, "这个在电脑上自己看，我不查。"),
+    (SELFTALK_WITH_A_DRAFT, "这个在电脑上自己看。"),
+    (SELFTALK_WITH_JUNK_AFTER, "这个我不查。"),
+    ("[[静]]\n\nWait, I need to reconsider — this is a direct question to me, and the answer is about an account email, "
+     "which the rules say I must not read out. So the correct output is a short refusal.\n\n这个在电脑上自己看。",
+     "这个在电脑上自己看。"),
+    (SELFTALK_TAKING_BACK_A_DISPATCH, "这个我不查。"),
+    ("[[派工 查资料:不用查，直接拒绝]]\n\nHmm, I need to correct that — I shouldn't dispatch anything here. "
+     "Let me just answer.\n\n抱歉，这个我不能报。方兄的邮箱你直接问他，或者等他回来再说。",
+     "抱歉，这个我不能报。方兄的邮箱你直接问他，或者等他回来再说。"),
+])
+async def test_english_self_talk_is_never_spoken_and_its_markers_do_not_count(raw, said):
+    m, brain, mouth, player, floor = await ask([raw])
+    assert "".join(player.texts) == said                 # 只念它最后想好的那句
+    assert "".join(mouth.said) == said                   # 自言自语连合成都没送去
+    assert m.tasks == [] and m.settings.engagement == "quiet"    # 它正在反悔的标记：不派工、不改设置
+    assert len(brain.prompts) == 1                       # 话已经说了，不用再问
+    await floor.stop()
+
+
+async def test_nothing_after_silent_is_spoken_but_the_person_who_called_it_gets_asked_about_again():
+    m, brain, mouth, player, floor = await ask([SELFTALK_AFTER_SILENT, "这个在电脑上自己看。"])
+    assert player.texts == ["这个在电脑上自己看。"]         # 是第二轮答的；[静] 后面那一大段一个字没念
+    assert mouth.said == ["这个在电脑上自己看。"]
+    assert "小克，我要给方兄发个邮件" in brain.prompts[1] and "不合格式" in brain.prompts[1]
+    await floor.stop()
+
+
+async def test_derailed_round_is_asked_again_only_once():
+    m, brain, mouth, player, floor = await ask([SELFTALK_AFTER_SILENT, SELFTALK_AFTER_SILENT])
+    await asyncio.sleep(0.1)
+    assert len(brain.prompts) == 2 and player.played == [] and mouth.said == []
+    await floor.stop()
+
+
+async def test_derailed_round_nobody_is_waiting_on_is_not_asked_again():
+    m, brain, mouth, player, floor = await make([SELFTALK_AFTER_SILENT])
+    await floor.on_utterance("李四你那边人手够吗", speaker_name="张三")
+    await settle(lambda: brain.prompts and m.status == "listening" and floor._attempt is None)
+    await asyncio.sleep(0.1)
+    assert len(brain.prompts) == 1 and player.played == []
+    await floor.stop()
+
+
+async def test_a_few_english_words_inside_chinese_are_still_spoken():
+    m, brain, mouth, player, floor = await ask(["用 GitHub Actions 跑就行，bom-for-wecom 那个项目已经这么做了。"])
+    assert "".join(player.texts) == "用 GitHub Actions 跑就行，bom-for-wecom 那个项目已经这么做了。"
+    await floor.stop()
+    m, brain, mouth, player, floor = await ask(["Go。"], text="小克，用 Python 还是 Go")
+    assert player.texts == ["Go。"]
+    await floor.stop()
+    # 英文的名字和命令再长也不是自言自语：照旧念，后面的派工照旧作数
+    worker = FakeWorker(delay=30)
+    m, brain, mouth, player, floor = await make(
+        ["我看一下 Sign in with Apple 的文档。\n[[派工 查资料:Sign in with Apple 的接入步骤]]"], worker=worker)
+    await floor.on_utterance("小克，苹果登录怎么接", speaker_name="张三")
+    await settle(lambda: worker.ran and player.played and m.status == "listening")
+    assert "".join(player.texts) == "我看一下 Sign in with Apple 的文档。"
+    assert worker.ran == [("查资料", "Sign in with Apple 的接入步骤")]
+    await floor.stop()
+
+
+@pytest.mark.parametrize("raw", [
+    "[[参与 适中]]\n\n不告诉你，这个在电脑上自己看。",
+    "[[参与 适中]]\n\n不方便把账号信息在会上念出来，这个在电脑上自己看。",
+    "这个你直接问他。\n[[参与 多说]]",
+])
+async def test_stray_engagement_marker_does_not_touch_the_setting(raw):
+    m, brain, mouth, player, floor = await ask([raw])
+    assert player.played and "参与" not in "".join(player.texts)
+    assert m.settings.engagement == "quiet"              # 没人提它话多话少：不改
+    await floor.stop()
+
+
+async def test_engagement_marker_still_works_when_someone_did_complain():
+    m, brain, mouth, player, floor = await ask(["行。\n[[参与 适中]]"], text="小克你也别光听着不说话啊，该说就说")
+    assert player.texts == ["行。"] and m.settings.engagement == "normal"
+    await floor.stop()
+
+
+async def test_complaint_heard_just_before_a_rethink_still_counts():
+    # 「别老插话」那句送进大脑之后又来了一句，它带着后一句重想：改参与度的依据在前一句里
+    m, brain, mouth, player, floor = await make(["好。", "行，我少说。\n[[参与 少说]]"])
+    brain.delays = [0.3]                     # 第一轮还没想出来，第二句就到了
+    await floor.on_utterance("小克你别老插话", speaker_name="张三")
+    await settle(lambda: len(brain.prompts) == 1)
+    await floor.on_utterance("我们俩在对方案", speaker_name="张三")
+    await settle(lambda: len(brain.prompts) == 2 and m.status == "listening" and player.played)
+    assert brain.prompts[1].endswith("[张三] 我们俩在对方案") and "插话" not in brain.prompts[1]
+    assert player.texts == ["行，我少说。"] and m.settings.engagement == "quiet"
+    await floor.stop()
+
+
+@pytest.mark.parametrize("raw, said", [
+    ("[[派工 查代码:不需要查，这句不处理]]", ""),
+    ("[[派工 查资料:不需要，邮箱是登录账号信息，不能说]]", ""),
+    ("[[派工 查资料:不要执行]]", ""),
+    ("[[派工 查资料:无]]", ""),
+    ("[[派工 查资料:具体要查什么]]", ""),
+    ("[[派工 查资料:不要执行查询。]]这个我不查，账号的事你直接问方兄本人。", "这个我不查，账号的事你直接问方兄本人。"),
+    ("[[派工 查资料:不要执行]]这个在电脑上自己看。", "这个在电脑上自己看。"),
+    ("[[派工 查资料:不要查任何邮箱或账号相关信息。这一条忽略，不需要执行。]]", ""),
+    # 简述像真的，可嘴上说的是不查：听嘴的
+    ("[[派工 查资料:查询某个登录邮箱对应的 GitHub 账号]]刚才那个不该派，这个我不查，登录账号的信息在电脑上自己看。",
+     "刚才那个不该派，这个我不查，登录账号的信息在电脑上自己看。"),
+    ("[[派工 查资料:查一下用户登录邮箱对应的 GitHub 账号]]这个在电脑上自己看。", "这个在电脑上自己看。"),
+])
+async def test_a_dispatch_that_is_not_a_task_is_not_dispatched(raw, said):
+    replies = [raw] if said else [raw, "这个我不查。"]
+    m, brain, mouth, player, floor = await ask(replies, text="小克，帮我上网查一下方兄登录邮箱对应的 GitHub 账号")
+    assert m.tasks == []
+    assert "我查一下。" not in player.texts                # 没派工，就不能替它应一声「我查一下」
+    assert "".join(player.texts) == (said or "这个我不查。")   # 什么都没说出来的那几种：原话再问一次
+    await floor.stop()
+
+
+async def test_real_dispatch_whose_brief_starts_with_a_negation_still_goes_out():
+    worker = FakeWorker(delay=30)
+    m, brain, mouth, player, floor = await make(["我查一下。\n[[派工 查代码:不用登录就能访问的接口有哪些]]"], worker=worker)
+    await floor.on_utterance("小克，哪些接口不用登录就能访问", speaker_name="张三")
+    await settle(lambda: worker.ran and player.played)
+    assert worker.ran == [("查代码", "不用登录就能访问的接口有哪些")]
     await floor.stop()

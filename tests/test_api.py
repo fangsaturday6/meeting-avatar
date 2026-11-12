@@ -120,6 +120,26 @@ def test_stage_receives_clip_and_reports_playback(client):
     wait_for(client, lambda s: not s["stage_online"])
 
 
+def test_state_says_so_when_the_microphone_goes_quiet(client, monkeypatch):
+    """耳机断开这类情况：窗口还连着，麦克风的声音却不来了。状态要如实说，不能照旧显示在听。"""
+    from avatar import api
+    monkeypatch.setattr(api, "MIC_SILENT_AFTER", 0.1)
+    hub = client.hub
+    client.post("/api/meeting/start")
+    assert client.get("/api/state").json()["mic_online"] is False
+    with client.websocket_connect("/ws/audio") as stage:
+        stage.send_bytes(b"\0" * 1280)
+        wait_for(client, lambda s: s["stage_online"] and s["mic_online"])
+        hub.ready["ears"] = True
+        hub.ears._speaking = True                 # 话说到一半麦克风断了
+        hub.floor.on_speech_start()
+        st = wait_for(client, lambda s: not s["mic_online"])
+        assert st["stage_online"] and not st["humans_speaking"]      # 不能一直以为有人在说，那样它永远不开口
+        stage.send_bytes(b"\0" * 1280)            # 声音回来了，马上恢复
+        wait_for(client, lambda s: s["mic_online"])
+    wait_for(client, lambda s: not s["mic_online"])
+
+
 def test_meeting_records_survive_the_meeting(client):
     assert client.get("/api/meetings").json() == [] and client.get("/api/state").json()["meetings"] == []
     assert client.get("/api/meetings/latest").status_code == 404
@@ -364,3 +384,81 @@ def test_old_meetings_without_minutes_get_them_on_the_next_start(monkeypatch, tm
         got = {m["id"]: m["minutes"] for m in st["meetings"]}
         assert got == {"2026-11-10_100000": "yes", "2026-11-10_110000": "", "2026-11-10_120000": "none"}
         assert len(worker.summarized) == 1 and "## 纪要" in c.get("/api/meetings/2026-11-10_100000").text
+
+
+# ---------- 接给我的智能体 ----------
+class FakeConnector:
+    """假的登记器：记下被要求做了什么，不碰真实的 Claude Code / Codex 配置。"""
+
+    def __init__(self, **states):
+        self.states = {"claude": "off", "codex": "missing", **states}
+
+    def clients(self):
+        from avatar import connect
+        return [{"id": cid, "name": c["name"], "state": self.states[cid]} for cid, c in connect.CLIENTS.items()]
+
+    def set(self, client_id, connected):
+        from avatar import connect
+        if why := connect.problem(client_id, self.states[client_id]):
+            raise ValueError(why)
+        self.states[client_id] = "on" if connected else "off"
+
+
+def test_agents_can_be_connected_and_tell_others_how_to_connect(client):
+    client.hub.agents = FakeConnector()
+    r = client.get("/api/agents").json()
+    assert r["clients"] == [{"id": "claude", "name": "Claude Code", "state": "off"},
+                            {"id": "codex", "name": "Codex", "state": "missing"}]
+    # 写给别的智能体看的那段话：三种接法的地址都是这个后台自己的
+    assert r["mcp"]["url"] == "http://testserver/mcp" and r["api"] == "http://testserver/api/meetings"
+    assert r["mcp"]["command"][-1].endswith("avatar/mcp_server.py")
+    for needle in ("http://testserver/mcp", "avatar/mcp_server.py", "http://testserver/api/meetings/latest", "read_meeting"):
+        assert needle in r["guide"], needle
+
+    with client.websocket_connect("/ws/events") as ws:
+        ws.receive_json()
+        r = client.put("/api/agents/claude", json={"connected": True})
+        assert r.status_code == 200 and r.json()["clients"][0]["state"] == "on"
+        ev = ws.receive_json()          # 别的窗口跟着变
+        assert ev["type"] == "agents" and ev["clients"][0]["state"] == "on"
+    assert client.put("/api/agents/claude", json={"connected": False}).json()["clients"][0]["state"] == "off"
+
+    r = client.put("/api/agents/codex", json={"connected": True})       # 动不了的说人话
+    assert r.status_code == 409 and r.json()["detail"] == "这台电脑上没装 Codex"
+    assert client.put("/api/agents/cursor", json={"connected": True}).status_code == 404
+    assert client.put("/api/agents/claude", json={"connected": "yes please"}).status_code == 422
+
+
+def test_meetings_are_readable_over_http_mcp(client, tmp_path):
+    from tests.test_mcp import seed
+    seed(tmp_path)
+
+    def rpc(method, id_=1, headers=None, **params):
+        return client.post("/mcp", json={"jsonrpc": "2.0", "id": id_, "method": method, "params": params}, headers=headers)
+
+    init = rpc("initialize", protocolVersion="2025-06-18").json()["result"]
+    assert init["serverInfo"]["name"] == "meetings" and init["protocolVersion"] == "2025-06-18"
+    r = client.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+    assert r.status_code == 202 and not r.content           # 通知不回内容
+    assert [t["name"] for t in rpc("tools/list").json()["result"]["tools"]] == ["list_meetings", "read_meeting", "search_meetings"]
+    found = rpc("tools/call", name="search_meetings", arguments={"query": "供应商"}).json()["result"]
+    assert not found["isError"] and "供应商接口下周上线" in found["content"][0]["text"]
+    assert rpc("resources/list").json()["error"]["code"] == -32601
+    assert client.get("/mcp").status_code == 405            # 没有服务端推送，只收 POST
+
+    r = client.post("/mcp", content=b"{not json", headers={"Content-Type": "application/json"})
+    assert r.status_code == 400 and r.json()["error"]["code"] == -32700
+    # 别的网站的页面读不到，哪怕它把域名指到了本机；本机页面可以
+    for origin in ("https://evil.example", "http://evil.example:8765", "null"):
+        assert rpc("tools/list", headers={"Origin": origin}).status_code == 403, origin
+    assert rpc("tools/list", headers={"Origin": "http://127.0.0.1:8765"}).status_code == 200
+    assert rpc("tools/list", headers={"Origin": "http://localhost:5173"}).status_code == 200
+
+
+def test_http_mcp_sees_the_meeting_in_progress(client):
+    client.post("/api/meeting/start")
+    client.post("/api/utterance", json={"speaker": "张三", "text": "供应商接口这周能上线吗"})
+    r = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                  "params": {"name": "read_meeting", "arguments": {"part": "dialogue"}}}).json()
+    assert "供应商接口这周能上线吗" in r["result"]["content"][0]["text"]
+    client.post("/api/meeting/stop")

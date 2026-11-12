@@ -70,7 +70,8 @@ class Meeting:
         self.status = "off"
         self.muted = False
         self.brain_ok = True
-        self.stage_online = False
+        self.stage_online = False               # 有窗口接通了声音（负责收音和播放）
+        self.mic_online = False                 # 那个窗口的麦克风声音确实在送过来（耳机断开时会停）
         self.humans_speaking = False
         self.started_at = 0.0
         self.board_task_id: int | None = None   # 资料板当前展示哪个任务
@@ -233,6 +234,7 @@ class Meeting:
             "muted": self.muted,
             "brain_ok": self.brain_ok,
             "stage_online": self.stage_online,
+            "mic_online": self.mic_online,
             "humans_speaking": self.humans_speaking,
             "started_at": self.started_at,
             "record_id": self.record_id,

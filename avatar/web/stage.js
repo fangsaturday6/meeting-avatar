@@ -24,9 +24,12 @@ const host = createAudioHost({
   onOutLevel: (l) => figure.setMouth(l),
   onCaption: (text, done) => { ui.caption = done ? '' : text; renderCaption(); },
   onLink: (link) => { ui.link = link; renderDock(); },
+  onMic: (e) => { ui.micError = e ? micProblem(e) : ''; renderAlerts(); },
 });
 
 const isActive = () => state.status !== 'off';
+// 开着会、声音也接通了，后台却收不到麦克风的声音（耳机断开之类）
+const deaf = () => isActive() && state.stage_online && !state.mic_online && !ui.connecting;
 const running = () => state.tasks.filter((t) => t.status === 'running');
 
 // 画面要表现的神态
@@ -54,7 +57,8 @@ function renderScene() {
   const owner = (state.settings.owner || '').trim();
   $('ai-tag').hidden = !(owner && state.settings.role === 'delegate');
   $('ai-tag').textContent = `${owner}的 AI`;
-  $('status-text').textContent = `${name}：${state.muted && isActive() ? '已静音' : STATUS_TEXT[state.status] || ''}`;
+  const doing = deaf() ? '听不到' : state.muted && isActive() ? '已静音' : STATUS_TEXT[state.status] || '';
+  $('status-text').textContent = `${name}：${doing}`;
 }
 
 function renderBoard() {
@@ -115,7 +119,9 @@ function renderAlerts() {
   if (!state.connected) items.push(['danger', '和后台断开了，正在重连']);
   else {
     if (!state.brain_ok && state.status !== 'off') items.push(['danger', '网络不稳，它的大脑暂时连不上，正在自动重试。这段时间它不会回应']);
-    if (ui.micError && host.running) items.push(['danger', `${esc(ui.micError)}<button id="btn-mic-retry" type="button">重试</button>`]);
+    const mic = (host.running && ui.micError) || (deaf() ? '麦克风没有声音，它现在只能说、听不到' : '');
+    const retry = host.running ? '<button id="btn-mic-retry" type="button">重试</button>' : '';
+    if (mic) items.push(['danger', esc(mic) + retry]);
     if (!state.ready.ears) items.push(['info', '语音模型还没装好，现在只能打字交流']);
     else if (!state.ready.speakers) items.push(['info', '声纹模型还没装好，暂时分不清是谁在说话']);
   }

@@ -64,6 +64,20 @@
     <hr>
     <label>麦克风<select id="mic-select"></select></label>
     <label>扬声器<select id="speaker-select"></select></label>
+    <hr>
+    <!-- 把会议记录接给自己的智能体：一行一个。Claude Code、Codex 是开关；别的智能体复制一段话发给它，它自己接 -->
+    <section id="agents" aria-labelledby="agents-label">
+      <h2 id="agents-label">接给我的智能体</h2>
+      <ul>
+        <li data-agent="claude"><span class="agent-name">Claude Code</span><span class="agent-state"></span>
+          <button id="agent-claude" class="switch" type="button" role="switch" aria-checked="false" aria-label="Claude Code" disabled></button></li>
+        <li data-agent="codex"><span class="agent-name">Codex</span><span class="agent-state"></span>
+          <button id="agent-codex" class="switch" type="button" role="switch" aria-checked="false" aria-label="Codex" disabled></button></li>
+        <li><span class="agent-name">其他智能体</span>
+          <button id="btn-copy-agent-guide" class="text-btn" type="button">复制一段话发给它</button></li>
+      </ul>
+      <p id="agents-error" class="field-error" role="alert" hidden></p>
+    </section>
     <p id="settings-error" class="field-error" role="alert" hidden></p>
   </form>
 </div>

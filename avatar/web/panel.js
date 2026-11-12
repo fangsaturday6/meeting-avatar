@@ -8,7 +8,8 @@ const $ = (id) => document.getElementById(id);
 const state = emptyState();
 // view：记录页现在显示哪个视图。null = 跟着会议走（开着会看这场会，没开会看以前的会议）
 const ui = { view: null, renaming: null, settingsKey: '', engageKey: '', error: '', readerKey: '',
-  reader: { id: null, text: '', error: '', copied: false } };
+  reader: { id: null, text: '', error: '', copied: false },
+  agents: { busy: '', error: '', copied: false } };     // busy：正在接上或取消的那个智能体
 const store = {
   get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
   set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 存不了就算了 */ } },
@@ -265,6 +266,69 @@ async function saveSetting(name, value) {
   renderSettings(); renderEngagement(); renderTabs();
 }
 
+// ---------- 接给我的智能体 ----------
+// 每个智能体一行。接没接上看开关；没装的不给开关，直接写出来
+function renderAgents() {
+  const clients = state.agents ? state.agents.clients : [];
+  for (const li of document.querySelectorAll('#agents li[data-agent]')) {
+    const id = li.dataset.agent, c = clients.find((x) => x.id === id), sw = $(`agent-${id}`);
+    li.dataset.state = c ? c.state : '';
+    li.querySelector('.agent-state').textContent = c && c.state === 'missing' ? '这台电脑上没装' : '';
+    sw.setAttribute('aria-checked', String(!!c && c.state === 'on'));
+    sw.disabled = !c || c.state === 'missing' || !!ui.agents.busy;
+    sw.setAttribute('aria-busy', String(ui.agents.busy === id));
+  }
+  const copy = $('btn-copy-agent-guide');
+  copy.textContent = ui.agents.copied ? '已复制，粘贴给它' : '复制一段话发给它';
+  copy.classList.toggle('done', ui.agents.copied);
+  $('agents-error').hidden = !ui.agents.error;
+  $('agents-error').textContent = ui.agents.error;
+}
+
+async function loadAgents() {
+  const r = await api.agents();
+  if (r.ok) state.agents = r.data;
+  renderAgents();
+  return r;
+}
+
+async function toggleAgent(id) {
+  const sw = $(`agent-${id}`), on = sw.getAttribute('aria-checked') !== 'true';
+  ui.agents.busy = id; ui.agents.error = '';
+  renderAgents();
+  sw.setAttribute('aria-checked', String(on));      // 先动，不等后台（登记要一两秒）
+  const r = await api.connectAgent(id, on);
+  ui.agents.busy = '';
+  ui.agents.error = r.ok ? '' : r.message;
+  if (r.ok && state.agents) state.agents.clients = r.data.clients;
+  renderAgents();                                   // 没成时：开关拨回原来的位置
+}
+
+// 复制到剪贴板。不给剪贴板权限的环境（内嵌的预览面板）里退回老办法
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* 往下试老办法 */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;opacity:0';
+  document.body.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
+
+async function copyAgentGuide() {
+  const r = state.agents ? { ok: true } : await loadAgents();
+  ui.agents.error = r.ok ? '' : r.message;
+  if (r.ok) {
+    ui.agents.copied = await copyText(state.agents.guide);
+    if (!ui.agents.copied) ui.agents.error = '没能复制，点一下这个窗口再试';
+  }
+  renderAgents();
+  if (ui.agents.copied) setTimeout(() => { ui.agents.copied = false; renderAgents(); }, 2400);
+}
+
 // 麦克风和扬声器存在本机；主窗口监听到变化后立刻换设备
 async function renderDevices() {
   const { mics, speakers } = await listDevices().catch(() => ({ mics: [], speakers: [] }));
@@ -289,6 +353,7 @@ function render(part) {
   if (part === 'all' || part === 'lines' || part === 'speakers') renderTranscript();
   if (part === 'all' || part === 'status' || part === 'meetings') renderMeetings();
   if (part === 'all' || part === 'settings') renderSettings();
+  if (part === 'all' || part === 'agents') renderAgents();
 }
 
 // 统一执行一个操作：失败时把原因用人话显示在顶部
@@ -356,8 +421,14 @@ $('settings').addEventListener('change', (e) => {
   if (!t.name) return;
   saveSetting(t.name, t.type === 'checkbox' ? t.checked : t.type === 'range' ? Number(t.value) : t.value.trim());
 });
+$('agents').addEventListener('click', (e) => {
+  const li = e.target.closest('.switch:not(:disabled)')?.closest('li[data-agent]');
+  if (li) toggleAgent(li.dataset.agent);
+});
+$('btn-copy-agent-guide').addEventListener('click', copyAgentGuide);
 navigator.mediaDevices?.addEventListener?.('devicechange', renderDevices);
 
 connectEvents(state, render);
 render('all');
 renderDevices();
+loadAgents();
