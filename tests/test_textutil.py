@@ -1,5 +1,5 @@
 from avatar.textutil import (
-    ReplyStream, SentenceSplitter, clean_for_speech, echo_score, parse_reply, similar,
+    ReplyStream, SentenceSplitter, clean_for_speech, echo_score, fix_name, parse_reply, similar,
 )
 
 
@@ -85,3 +85,11 @@ def test_similar_and_echo():
     assert similar("我觉得先做登录", "我觉得先做登陆") > 0.8
     assert echo_score("先做登录吧", "我觉得还是先做登录吧，支付依赖它") > 0.9
     assert echo_score("那排期怎么定", "我觉得还是先做登录吧，支付依赖它") < 0.4
+
+
+def test_fix_name_corrects_homophones_only():
+    assert fix_name("小课，你咋不说话", "小克") == "小克，你咋不说话"
+    assert fix_name("他们还有青年小柯。", "小克") == "他们还有青年小克。"
+    assert fix_name("小克你好", "小克") == "小克你好"
+    assert fix_name("我们上课吧", "小克") == "我们上课吧"
+    assert fix_name("OK", "小克") == "OK"

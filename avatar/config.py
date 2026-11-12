@@ -37,7 +37,7 @@ class Settings:
     silence_nudge: float = 6.0   # 会场安静多少秒后提示数字人一次
     gap: float = 0.4             # 别人说完后至少等多久再开口
     hold: float = 4.0            # 被问到后，旁边一直有别的声音时最多等多久就顶着说
-    barge_delay: float = 0.35    # 别人持续说多久算打断
+    barge_delay: float = 0.9     # 别人持续说多久算打断。太短的话一声「嗯」就会把它打断
     barge_grace: float = 0.5     # 刚开口的这段时间内不算打断（防回声误触发）
 
     def to_dict(self) -> dict:

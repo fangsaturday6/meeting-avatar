@@ -10,6 +10,7 @@ dependencies = [
     "sherpa-onnx>=1.10.30",
     "edge-tts>=6.1.12",
     "httpx>=0.27",
+    "pypinyin>=0.50",
 ]
 
 [dependency-groups]
@@ -22,3 +23,10 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = ["live: 需要真实的 Claude、网络或模型，默认不跑"]
 addopts = "-m \"not live\""
+
+# 官方源在这台机器的网络下经常连不上，默认用国内镜像
+[[tool.uv.index]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
