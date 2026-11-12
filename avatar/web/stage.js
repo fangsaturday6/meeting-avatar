@@ -46,6 +46,10 @@ function renderScene() {
   figure.setState(v, params.has('pose'));
   const name = state.settings.name || '数字人';
   document.title = name;
+  // 替主人开会时，让会上的人一眼看出它是谁的 AI
+  const owner = (state.settings.owner || '').trim();
+  $('ai-tag').hidden = !(owner && state.settings.role === 'delegate');
+  $('ai-tag').textContent = `${owner}的 AI`;
   $('status-text').textContent = `${name}：${state.muted && isActive() ? '已静音' : STATUS_TEXT[state.status] || ''}`;
 }
 
@@ -106,7 +110,7 @@ function renderAlerts() {
   if (ui.error) items.push(['danger', esc(ui.error)]);
   if (!state.connected) items.push(['danger', '和后台断开了，正在重连']);
   else {
-    if (!state.brain_ok) items.push(['danger', '网络不稳，它的大脑暂时连不上，正在自动重试。这段时间它不会回应']);
+    if (!state.brain_ok && state.status !== 'off') items.push(['danger', '网络不稳，它的大脑暂时连不上，正在自动重试。这段时间它不会回应']);
     if (ui.micError && host.running) items.push(['danger', `${esc(ui.micError)}<button id="btn-mic-retry" type="button">重试</button>`]);
     if (!state.ready.ears) items.push(['info', '语音模型还没装好，现在只能打字交流']);
     else if (!state.ready.speakers) items.push(['info', '声纹模型还没装好，暂时分不清是谁在说话']);

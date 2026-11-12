@@ -8,37 +8,62 @@
 <link rel="stylesheet" href="/static/panel.css">
 </head>
 <body>
-<div id="panel" data-status="off" data-tab="settings">
+<div id="panel" data-status="off" data-tab="settings" data-view="live">
   <nav id="tabs" class="segmented" role="tablist">
     <button id="tab-notes" type="button" role="tab" aria-controls="notes" data-tab="notes">记录</button>
     <button id="tab-settings" type="button" role="tab" aria-controls="settings" data-tab="settings">设置</button>
   </nav>
   <ul id="alerts" class="alerts" hidden></ul>
 
+  <!-- 记录：三个视图，同一时间只显示一个——这场会（live）、以前的会议（list）、读其中一场（read） -->
   <section id="notes" role="tabpanel" aria-labelledby="tab-notes">
-    <ul id="tasks"></ul>
-    <ol id="transcript" aria-live="polite"></ol>
-    <form id="composer" autocomplete="off">
-      <select id="say-kind" name="kind" aria-label="说话，或者派一个后台任务"></select>
-      <input id="say-text" name="text" maxlength="2000" placeholder="打字" aria-label="内容">
-      <button id="btn-send" class="icon-btn" type="submit" data-icon="send" aria-label="发送" title="发送"></button>
-    </form>
-    <p id="composer-error" class="field-error" role="alert" hidden></p>
+    <div id="live">
+      <div id="live-head">
+        <button id="btn-meetings" class="icon-btn" type="button" data-icon="back" aria-label="以前的会议" title="以前的会议" hidden></button>
+        <ul id="tasks"></ul>
+      </div>
+      <ol id="transcript" aria-live="polite"></ol>
+      <form id="composer" autocomplete="off">
+        <select id="say-kind" name="kind" aria-label="说话，或者派一个后台任务"></select>
+        <input id="say-text" name="text" maxlength="2000" placeholder="打字" aria-label="内容">
+        <button id="btn-send" class="icon-btn" type="submit" data-icon="send" aria-label="发送" title="发送"></button>
+      </form>
+      <p id="composer-error" class="field-error" role="alert" hidden></p>
+    </div>
+
+    <ul id="meetings"></ul>
+
+    <article id="reader" aria-labelledby="reader-title">
+      <header id="reader-head">
+        <button id="btn-reader-close" class="icon-btn" type="button" data-icon="back" aria-label="返回" title="返回"></button>
+        <div id="reader-heading"><h2 id="reader-title"></h2><p id="reader-sub"></p></div>
+        <button id="btn-minutes" class="text-btn" type="button">整理纪要</button>
+        <button id="btn-copy-path" class="text-btn" type="button">复制路径</button>
+      </header>
+      <div id="reader-body"></div>
+    </article>
   </section>
 
   <form id="settings" role="tabpanel" aria-labelledby="tab-settings" autocomplete="off">
+    <div id="engagement" class="segmented" role="radiogroup" aria-label="它说多少" data-setting="engagement"></div>
     <label>会议背景<textarea id="set-topic" name="topic" rows="3" placeholder="这场会要讨论什么、谁参加"></textarea></label>
-    <div class="field"><span id="scene-label">场景</span><div id="set-scene" class="segmented" role="radiogroup" aria-labelledby="scene-label"></div></div>
-    <label>项目目录<input id="set-project" name="project_dir" placeholder="/Users/你/项目" spellcheck="false"></label>
+    <div id="set-role" class="segmented" role="radiogroup" aria-label="我在不在场" data-setting="role"></div>
+    <label class="check" id="open-book-row" hidden><input id="set-open-book" name="open_book" type="checkbox">可以谈我的其他项目和别的会</label>
+    <div id="set-scene" class="segmented" role="radiogroup" aria-label="场景" data-setting="scene"></div>
+    <label>这场会聊的项目<input id="set-project" name="project_dir" placeholder="/Users/你/项目" spellcheck="false"></label>
+    <label>我的项目都放在<input id="set-projects-root" name="projects_root" spellcheck="false">
+      <output id="projects-count" for="set-projects-root set-project"></output></label>
     <hr>
-    <label>名字<input id="set-name" name="name" maxlength="12"></label>
+    <div class="pair">
+      <label>它的名字<input id="set-name" name="name" maxlength="12"></label>
+      <label>我的名字<input id="set-owner" name="owner" maxlength="12"></label>
+    </div>
     <label>嗓音<select id="set-voice" name="voice"></select></label>
     <label>语速<input id="set-speed" name="speed" type="range" min="0.8" max="1.5" step="0.05"></label>
     <label class="check"><input id="set-skills" name="use_my_skills" type="checkbox">做设计时用我本机 Claude 的技能</label>
     <hr>
     <label>麦克风<select id="mic-select"></select></label>
     <label>扬声器<select id="speaker-select"></select></label>
-    <label>打字时我的名字<input id="say-as" maxlength="30"></label>
     <p id="settings-error" class="field-error" role="alert" hidden></p>
   </form>
 </div>

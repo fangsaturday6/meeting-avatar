@@ -4,13 +4,34 @@
     {
       "name": "meeting-avatar",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "python", "-m", "avatar"],
+      "runtimeArgs": [
+        "run",
+        "python",
+        "-m",
+        "avatar"
+      ],
       "port": 8765
+    },
+    {
+      "name": "avatar-dev",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "AVATAR_WORKSPACE=\"$HOME/.cache/avatar-dev\" exec uv run python -m avatar --port 8766"
+      ],
+      "port": 8766
     },
     {
       "name": "avatar-demo",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "python", "-m", "avatar.demo", "--port", "8767"],
+      "runtimeArgs": [
+        "run",
+        "python",
+        "-m",
+        "avatar.demo",
+        "--port",
+        "8767"
+      ],
       "port": 8767
     }
   ]

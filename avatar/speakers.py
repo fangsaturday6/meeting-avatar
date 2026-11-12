@@ -96,7 +96,7 @@ class SpeakerBook:
 
     def rename(self, speaker_id: int, name: str) -> Speaker:
         sp = self.speakers[speaker_id]
-        sp.name = name.strip() or sp.name
+        sp.name = " ".join(name.split()) or sp.name     # 名字里不留换行：它会原样写进会议记录和给大脑的话里
         return sp
 
     def name_of(self, speaker_id: int | None) -> str:

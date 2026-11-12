@@ -23,7 +23,11 @@ body { overflow: hidden; }
 #caption:empty { opacity: 0; }
 #stage[data-board="on"] #caption { right: auto; width: 34%; min-width: 240px; padding: 0 16px; }
 
+/* 替主人开会时挂出来：让会上的人一眼看出它是谁的 AI */
+#ai-tag { position: absolute; top: 34px; left: 50%; translate: -50% 0; margin: 0; padding: 3px 13px; border-radius: 999px; font-size: clamp(13px, 2vmin, 20px); font-weight: 600; white-space: nowrap; color: #fff; background: var(--tone); }
+#stage[data-board="on"] #ai-tag { left: max(120px, 17%); }
 #alerts { position: absolute; top: 34px; left: 16px; right: 16px; }
+#ai-tag:not([hidden]) ~ #alerts { top: 72px; }
 
 /* 控制条：会前一直在；开会后鼠标动一下才出来 */
 #dock { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 999px; background: var(--glass); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent), 0 10px 30px rgba(0, 0, 0, .12); transition: opacity .25s ease, transform .25s ease; }

@@ -13,8 +13,11 @@ class FakeBrain:
         self.started = False
         self.on_retry = None          # Floor 会接上：大脑请求重试时回调
         self.retries_before_reply = 0  # 回答前先模拟几次网络重试
+        self.start_delay = 0.0         # 入会预热要多久（模拟网络不好）
+        self.delays: list[float] = []  # 给前几轮单独指定快慢（模拟网络断了又恢复）
 
     async def start(self):
+        await asyncio.sleep(self.start_delay)
         self.started = True
 
     async def stop(self):
@@ -23,14 +26,15 @@ class FakeBrain:
     async def ask(self, prompt):
         self.prompts.append(prompt)
         reply = self.replies.pop(0) if self.replies else "[静]"
+        delay = self.delays.pop(0) if self.delays else self.delay
 
         async def gen():
             for n in range(self.retries_before_reply):
-                await asyncio.sleep(self.delay)
+                await asyncio.sleep(delay)
                 if self.on_retry:
                     self.on_retry(n + 1)
             for i in range(0, len(reply), 3):
-                await asyncio.sleep(self.delay)
+                await asyncio.sleep(delay)
                 yield reply[i:i + 3]
         return gen()
 
@@ -75,10 +79,17 @@ class FakePlayer:
 
 
 class FakeWorker:
-    def __init__(self, result=None, delay=0.0):
+    def __init__(self, result=None, delay=0.0, minutes="登录排期\n\n### 结论\n- 先做登录"):
         self.result = result or WorkResult(True, "查到了：接口文档在开放平台第三章。")
         self.delay = delay
         self.ran: list[tuple[str, str]] = []
+        self.minutes = minutes
+        self.summarized: list[str] = []
+
+    async def summarize(self, transcript):
+        self.summarized.append(transcript)
+        await asyncio.sleep(self.delay)
+        return WorkResult(bool(self.minutes), self.minutes or "网络不稳，没整理成")
 
     async def run(self, task, on_progress):
         self.ran.append((task.kind, task.brief))

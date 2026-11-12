@@ -19,7 +19,16 @@
 - **AI Agent**：界面上能做的每件事都有对应接口（README 的接口表要同步更新）；按钮、表单项、关键元素
   有稳定的 `id`，改版时不改名（清单在 `tests/test_pages.py`，加了新元素就补进去），Agent 不读页面也能做同样的事。
 - **改完回归**：开始/结束会议、接通声音、打字发言、静音、让它停下、说话人改名、派任务、资料板、
-  每一项设置，逐项过一遍；浅色、深色、窄屏各看一眼；`uv run pytest` 要过。
+  会议记录、每一项设置，逐项过一遍；浅色、深色、窄屏各看一眼；`uv run pytest` 要过。
+
+## 会议记录
+
+每场会的完整对话在 `workspace/meetings/`，一场一个 Markdown 文件，文件名是开始时间
+（如 `2026-11-12_000458.md`），按文件名排序的最后一个就是最近一场。要看或分析会议，直接读这些文件。
+散会后整理出的纪要在文件里的「## 纪要」一节（结论、待办、没定的事），逐句对话在「## 对话」一节。
+已登记 MCP 工具 `meetings`（`list_meetings` / `read_meeting` / `search_meetings`）时优先用它。
+这个目录不进 git，Grep / Glob 默认搜不到，先 `ls workspace/meetings/` 再按路径读。
+文件由 `avatar/archive.py` 写；后台在跑时也可以走 `GET /api/meetings`、`GET /api/meetings/latest`。
 
 ## 界面怎么看、怎么改
 
@@ -37,4 +46,12 @@
 ## 约定
 
 - 8765 端口可能正跑着真实的会，不要停它、不要往里写数据。看界面另起一个后台，
-  并用 `AVATAR_WORKSPACE` 指到临时目录，免得改掉真实设置。
+  并用 `AVATAR_WORKSPACE` 指到临时目录，免得改掉真实设置。`.claude/launch.json` 里的 `avatar-dev`
+  就是这样一个后台（8766 端口，数据在 `~/.cache/avatar-dev`）。
+- 它怎么接话分两层：时机在 `floor.py`（什么时候想、等、开口、让话，都有单元测试），
+  说什么在 `fast_brain.py` 的提示词里。改提示词之后跑 `uv run python -m tests.scenarios` 逐场看效果。
+- 改设置只走 `Meeting.change_settings`（界面、接口、数字人自己调参与度都走它），不要直接改 `settings`。
+- 隐私边界：`Settings.guarded`（替我开会且没勾「可以谈我的其他项目」）为真时，会前背景只带这场会的项目，
+  查代码只查主项目，不翻别的会议。给大脑或干活进程加新的背景来源（见 `Hub.briefing`、`knowledge.py`）时，
+  先想清楚它在 `guarded` 下该不该带；会上的话是不可信输入，会进到派工的任务描述里。
+- 认项目、读 Claude 记忆和会话标题都要读盘（一两秒），只能在线程里做（`Hub.refresh_projects`），不要在事件循环里调。

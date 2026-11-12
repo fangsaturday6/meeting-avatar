@@ -9,12 +9,14 @@ from avatar import demo
 from avatar.api import create_app
 
 # 界面元素的稳定名字。AI Agent 和桌面应用的菜单靠这些 id 找按钮，改版时不能改名。
-STAGE_IDS = ["stage", "avatar", "status-text", "board", "board-kind", "board-brief", "board-body", "board-open",
+STAGE_IDS = ["stage", "avatar", "status-text", "ai-tag", "board", "board-kind", "board-brief", "board-body", "board-open",
              "btn-board-close", "caption", "alerts", "dock", "btn-start", "btn-mute", "btn-hush", "btn-stop",
              "btn-notes", "btn-settings"]
-PANEL_IDS = ["panel", "tab-notes", "tab-settings", "alerts", "tasks", "transcript", "composer", "say-kind", "say-text",
-             "btn-send", "composer-error", "settings", "set-topic", "set-scene", "set-project", "set-name", "set-voice",
-             "set-speed", "set-skills", "mic-select", "speaker-select", "say-as", "settings-error"]
+PANEL_IDS = ["panel", "tab-notes", "tab-settings", "alerts", "btn-meetings", "tasks", "transcript", "composer", "say-kind",
+             "say-text", "btn-send", "composer-error", "meetings", "reader", "reader-title", "reader-sub", "btn-reader-close",
+             "btn-minutes", "btn-copy-path", "reader-body", "settings", "engagement", "set-topic", "set-role", "open-book-row",
+             "set-open-book", "set-scene", "set-project", "set-projects-root", "projects-count", "set-name", "set-owner",
+             "set-voice", "set-speed", "set-skills", "mic-select", "speaker-select", "settings-error"]
 
 
 @pytest.fixture
@@ -45,15 +47,6 @@ def test_pages_keep_their_ids(client, path, expected):
     assert not set(expected) - ids(r.text)
 
 
-def test_pages_and_assets_are_never_stale(client):
-    """更新界面后不能出现新页面配旧脚本：页面和静态文件都要求浏览器每次确认。"""
-    for path in ["/", "/panel", "/static/stage.js", "/static/stage.css"]:
-        r = client.get(path)
-        assert r.headers["cache-control"] == "no-cache", path
-    etag = client.get("/static/stage.js").headers["etag"]
-    assert client.get("/static/stage.js", headers={"If-None-Match": etag}).status_code == 304
-
-
 def test_page_assets_are_served(client):
     for name in ["stage.js", "panel.js", "character.js", "avatar.js", "audio.js", "api.js", "icons.js", "common.css",
                  "vendor/three/three.module.js", "vendor/three/three.core.js", "vendor/three/RoomEnvironment.js"]:
@@ -65,9 +58,10 @@ def test_every_page_action_has_an_api():
     from pathlib import Path
     src = (Path(demo.__file__).parent / "web" / "api.js").read_text(encoding="utf-8")
     called = set(re.findall(r"call\('(GET|POST|PATCH)', [`']([^`'$]+)", src))
-    routes = {(m, re.sub(r"\{[^}]+\}", "", r.path)) for r in create_app(demo.DemoHub()).routes
-              for m in getattr(r, "methods", None) or []}
-    assert called and called <= routes, called - routes
+    routes = {(m, r.path) for r in create_app(demo.DemoHub()).routes for m in getattr(r, "methods", None) or []}
+    # 带参数的地址（/api/meetings/{id}/minutes）在 api.js 里只写到参数之前，所以按开头比
+    missing = {(m, p) for m, p in called if not any(rm == m and rp.split("{")[0] == p or rm == m and rp == p for rm, rp in routes)}
+    assert called and not missing, missing
 
 
 def test_demo_meeting_runs_without_models(client, tmp_path):

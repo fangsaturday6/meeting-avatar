@@ -93,3 +93,55 @@ def test_fix_name_corrects_homophones_only():
     assert fix_name("小克你好", "小克") == "小克你好"
     assert fix_name("我们上课吧", "小克") == "我们上课吧"
     assert fix_name("OK", "小克") == "OK"
+
+
+def test_backchannel_is_only_short_agreement():
+    from avatar.textutil import is_backchannel
+    for yes in ["嗯", "嗯嗯。", "对对对", "好的", "是的，", "OK", "嗯，你继续", "然后呢？"]:
+        assert is_backchannel(yes), yes
+    for no in ["不对", "好了好了", "等一下", "先做支付", "嗯，但是排期呢", "小克", ""]:
+        assert not is_backchannel(no), no
+
+
+def test_reply_can_carry_an_engagement_change():
+    from avatar.textutil import ReplyStream, parse_reply
+    r = parse_reply("行，我少说。\n[[参与 少说]]")
+    assert r.speech == "行，我少说。" and r.engagement == "quiet" and r.dispatch is None
+    assert parse_reply("好。").engagement is None
+    rs = ReplyStream()
+    out = []
+    for ch in "好，我多说点。\n[[参与 多说]]":
+        out += rs.feed(ch)
+    rest, reply = rs.finish()
+    assert "".join(out + rest) == "好，我多说点。" and reply.engagement == "active"
+
+
+def test_reply_can_name_speakers():
+    from avatar.textutil import parse_reply
+    r = parse_reply("[静]\n[[称呼 说话人2=张三]]\n[[称呼：说话人3 ＝ 李四]]")
+    assert r.silent and r.speech == "" and r.names == (("说话人2", "张三"), ("说话人3", "李四"))
+    r = parse_reply("你好王五。\n[[称呼 说话人1=王五]]")
+    assert not r.silent and r.speech == "你好王五。" and r.names == (("说话人1", "王五"),)
+    assert parse_reply("好。").names == ()
+
+
+def test_marker_before_the_words_does_not_swallow_them():
+    from avatar.textutil import ReplyStream
+    rs, out = ReplyStream(), []
+    for ch in "[[称呼 说话人2=王五]]\n欢迎王五，我们开始吧。\n[[参与 适中]]":
+        out += rs.feed(ch)
+    rest, reply = rs.finish()
+    assert "".join(out + rest) == "欢迎王五，我们开始吧。"
+    assert reply.names == (("说话人2", "王五"),) and reply.engagement == "normal" and not reply.silent
+    rs, out = ReplyStream(), []
+    for ch in "[[称呼 说话人2=王五]]\n[静]":
+        out += rs.feed(ch)
+    rest, reply = rs.finish()
+    assert out + rest == [] and reply.silent and reply.names == (("说话人2", "王五"),)
+
+
+def test_speaker_prefix_copied_from_the_transcript_is_not_spoken():
+    from avatar.textutil import clean_for_speech
+    assert clean_for_speech("[小克] 在，你说。") == "在，你说。"
+    assert clean_for_speech("[说话人1] 好。") == "好。"
+    assert clean_for_speech("用 [0, 1] 这个区间。") == "用 [0, 1] 这个区间。"

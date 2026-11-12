@@ -21,15 +21,23 @@ VOICES = {
     "zh-CN-XiaoyiNeural": "在线·晓伊（女，活泼）",
 }
 SCENES = {"room": "当面开会", "online": "线上会议"}
+ROLES = {"companion": "陪我开会", "delegate": "替我开会"}
+# 参与度：只在被叫到时说 / 有实质补充才说 / 每个议题都主动给看法
+ENGAGEMENTS = {"quiet": "少说", "normal": "适中", "active": "多说"}
 
 
 @dataclass
 class Settings:
     name: str = "小克"
+    owner: str = ""              # 它是谁的分身（你的名字）。会上别人提到这个名字，它知道是在说你
+    role: str = "companion"      # companion = 你也在场；delegate = 你不在，它替你去
+    engagement: str = "normal"   # 参与度，见 ENGAGEMENTS
+    open_book: bool = False      # 替你开会时，能不能谈这场会之外的事（你的其他项目、别的会、Claude 的记忆）
     voice: str = "local"
     speed: float = 1.1           # 语速，1.0 为正常
     scene: str = "room"
-    project_dir: str = ""        # 「查代码」「做设计」的工作目录
+    project_dir: str = ""        # 这场会主要讨论的项目
+    projects_root: str = ""      # 你所有项目所在的目录；留空 = 项目目录的上一级
     topic: str = ""              # 会议背景，开会前告诉数字人
     fast_model: str = "claude-haiku-5-5"
     slow_model: str = ""         # 干活用的模型；留空 = 本机 Claude 的默认模型（最稳）
@@ -42,6 +50,11 @@ class Settings:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @property
+    def guarded(self) -> bool:
+        """你不在场、又没放开：它只知道、只能查这场会的项目。会上的人没法通过它打听你别的事。"""
+        return self.role == "delegate" and not self.open_book
 
     def update(self, data: dict) -> list[str]:
         """只接受已知字段且类型匹配的值，返回实际改动的字段名。"""
@@ -60,6 +73,12 @@ class Settings:
                 raise ValueError("没有这个场景")
             if f.name == "project_dir" and new and not Path(new).expanduser().is_dir():
                 raise ValueError("项目目录不存在")
+            if f.name == "projects_root" and new and not Path(new).expanduser().is_dir():
+                raise ValueError("这个目录不存在")
+            if f.name == "role" and new not in ROLES:
+                raise ValueError("没有这种角色")
+            if f.name == "engagement" and new not in ENGAGEMENTS:
+                raise ValueError("参与度只能是：" + "、".join(ENGAGEMENTS))
             if f.name == "name" and not new.strip():
                 raise ValueError("名字不能为空")
             if f.name == "speed" and not 0.6 <= new <= 1.8:
@@ -78,9 +97,14 @@ class Settings:
         s = cls()
         if path.exists():
             try:
-                s.update(json.loads(path.read_text(encoding="utf-8")))
+                data = json.loads(path.read_text(encoding="utf-8"))
             except (ValueError, OSError):
-                pass  # 文件坏了就用默认值
+                return s  # 文件坏了就用默认值
+            for key, value in (data.items() if isinstance(data, dict) else ()):
+                try:
+                    s.update({key: value})
+                except ValueError:
+                    pass  # 只跳过不合法的这一项（比如登记的目录已经不在了），别连累其他设置
         return s
 
 
