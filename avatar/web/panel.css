@@ -3,6 +3,8 @@
 #tabs { margin: 14px auto 10px; width: 180px; flex: none; }
 #alerts { padding: 0 16px 8px; }
 #panel[data-tab="notes"] #settings, #panel[data-tab="settings"] #notes { display: none; }
+/* 可滚动的区域会被浏览器当成可聚焦的，打开窗口时顶上会多出一条焦点线 */
+#settings:focus-visible, #transcript:focus-visible, #meetings:focus-visible, #reader-body:focus-visible { outline: none; }
 
 .segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px; border-radius: 10px; background: var(--hover); }
 .segmented > * { position: relative; border: 0; background: transparent; border-radius: 8px; padding: 5px 8px; text-align: center; font-size: 14px; color: var(--ink2); cursor: pointer; }
