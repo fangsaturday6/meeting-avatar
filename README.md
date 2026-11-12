@@ -1,32 +1,87 @@
-# 会议数字人
+<p align="center"><img src="app/icon.png" width="120" alt="小克"></p>
+<h1 align="center">会议数字人</h1>
+<p align="center">跑在你自己电脑上的 AI 与会者：陪你开会，也可以替你去开会。</p>
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT">
+  <img src="https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-lightgrey" alt="macOS">
+  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12-3776ab" alt="Python 3.11 | 3.12">
+</p>
 
-你的 AI 分身，陪你开会，也可以替你去开会：听得懂多人讨论，等别人把话说完再接，别人一插话就停下；
-认识你电脑上的所有项目，能在后台查代码、联网查资料、翻以前的会议、出设计稿，查完口头汇报。
-散会后自动整理纪要（结论、待办、没定的事），你本机的 Claude Code 和 Codex 可以直接读到每一场会。
-当面开会和线上会议（腾讯会议、飞书等）共用同一套。
+<p align="center">
+  <img src="docs/images/listening.png" width="23%" alt="在听">
+  <img src="docs/images/thinking.png" width="23%" alt="在想">
+  <img src="docs/images/waiting.png" width="23%" alt="想发言">
+  <img src="docs/images/speaking.png" width="23%" alt="在说">
+</p>
+<p align="center"><sub>在听 · 在想 · 想发言 · 在说</sub></p>
 
-大脑用的是本机已登录的 `claude` 命令行，不需要任何密钥。语音识别、断句、声纹、语音合成全部在本地运行。
+> **meeting-avatar** — an AI attendee that runs on your own Mac. It listens to multi-speaker meetings, waits for its turn,
+> stops when interrupted, looks things up in the background, and writes the minutes afterwards. Speech recognition,
+> voice activity detection, speaker identification and speech synthesis all run locally; the brain is the `claude` CLI
+> you are already logged in to. The interface and the recognition models are tuned for Mandarin Chinese.
 
-## 启动
+## 它是什么
 
-它是一个桌面应用：打开就是它本人，没有别的。
+你的 AI 分身，陪你开会，也可以替你去开会：
+
+- **会接话**：听得懂多人讨论，等别人把话说完再接，别人一插话就停下。
+- **会干活**：认识你电脑上的所有项目，能在后台查代码、联网查资料、翻以前的会议、出设计稿，查完口头汇报。
+- **会记录**：散会后自动整理纪要（结论、待办、没定的事），你自己的 Claude Code、Codex 和别的智能体可以直接读到每一场会。
+- **在本机**：语音识别、断句、声纹、语音合成全部在本地运行；大脑用的是本机已登录的 `claude` 命令行，不需要任何密钥。
+- **两种会都行**：当面开会和线上会议（腾讯会议、飞书等）共用同一套。
+
+## 需要什么
+
+| | |
+|---|---|
+| 电脑 | Mac，Apple 芯片。在 M1 / 16GB 上开发和实测；Windows 和 Linux 没有适配 |
+| [uv](https://docs.astral.sh/uv/) | 装依赖和运行后台。Python（3.11 或 3.12）由它准备，不用自己装 |
+| [Claude Code](https://claude.com/claude-code) 命令行 | 它的大脑。要在终端里能运行 `claude` 并且已经登录；没有的话形象和界面起得来，但不会接话，也出不了纪要 |
+| Node.js | 只有想要双击就开的桌面应用时才需要 |
+| 磁盘 | 本地语音模型约 440MB |
+
+## 安装
 
 ```bash
-uv run python -m avatar.models      # 首次：下载本地语音模型（约 440MB，逐个文件校验）
-cd app && npm install && npm run pack   # 首次：打包出 app/dist/小克.app，拖到「应用程序」里
+git clone https://github.com/fangsaturday6/meeting-avatar.git
+cd meeting-avatar
+uv sync                             # 装依赖
+uv run python -m avatar.models      # 下载本地语音模型（约 440MB，逐个文件校验）
+uv run python -m avatar             # 启动
 ```
 
-之后双击「小克」就行。应用会自己把后台起起来，退出时一起关掉；后台已经在跑的话就直接接上。
+然后用 Chrome 打开 http://127.0.0.1:8765/ ，点「开始」，对它说话。
+
+想先看看长什么样，不下载模型、不需要 Claude 也行：
+
+```bash
+uv run python -m avatar.demo --autoplay
+```
+
+打开 http://127.0.0.1:8767/ ，它会自己演一场会。
+
+### 装成桌面应用
+
+```bash
+cd app && npm install && npm run pack
+```
+
+打包出 `app/dist/小克.app`，拖到「应用程序」里，之后双击「小克」就行。应用会自己把后台起起来，退出时一起关掉；
+后台已经在跑的话就直接接上。这个应用记着项目文件夹的位置，挪了项目就重新打包一次；换个名字：`npm run pack -- 大锤`。
+
+依赖默认从国内镜像下载（`pyproject.toml` 里的清华源、`app/.npmrc` 里的 npmmirror）。在别的网络下嫌慢，把这两处删掉就走官方源。
+
+## 界面
+
+它是一个桌面应用：打开就是它本人，没有别的。
 
 | 窗口 | 里面有什么 |
 |---|---|
 | 主窗口 | 只有它本人。状态看颜色和动作：闭眼=没开会，青=在听，紫=托下巴在想，琥珀=举手想发言，橙红=在说；头顶有光球在转=后台在干活；话筒翻上去=已静音 |
-| 设置窗口 | 「记录」：对话、任务、打字发言、派任务、以前的会议和纪要；「设置」：会议背景、陪我还是替我开会、它说多少、场景、名字、嗓音、麦克风和扬声器等 |
+| 设置窗口 | 「记录」：对话、任务、打字发言、派任务、以前的会议和纪要；「设置」：会议背景、陪我还是替我开会、它说多少、场景、名字、嗓音、麦克风和扬声器、把会议记录接给你自己的智能体等 |
 
 主窗口底部的控制条：会前是「开始」和设置；开会后是静音、让它停下、结束会议、会议记录、设置，鼠标动一下才出现。
 同样的操作在菜单栏「会议」里也有，带快捷键。
-
-不想装应用也可以：`uv run python -m avatar` 之后用 Chrome 打开 http://127.0.0.1:8765/ ，是同一个界面。
 
 ## 当面开会
 
@@ -131,12 +186,23 @@ cd app && npm install && npm run pack   # 首次：打包出 app/dist/小克.app
 
 ### 让你自己的 AI 读会议
 
+设置窗口最下面的「接给我的智能体」，一行一个：
+
+- **Claude Code、Codex**：打开开关就接上了（在它们那边登记一个叫 `meetings` 的只读工具），再点一下取消。
+  之后在任何项目里对它们说「看下刚才的会」「上次会上分给我什么事」「会上关于供应商接口怎么说的」，它们会自己去读。
+  这台电脑上没装的那个不给开关。它们那边已经有一个同名的别的服务时不会动它，会告诉你。
+- **其他智能体**（Cursor、Claude 桌面版、你自己写的程序等）：点「复制一段话发给它」，粘贴到它的对话框里，
+  它照着把会议记录接成自己的工具。这段话里有三种接法，它挑自己支持的：HTTP 方式的 MCP（`http://127.0.0.1:8765/mcp`，
+  数字人开着时可用）、本地命令方式的 MCP（数字人没开也能用）、不支持 MCP 就直接调下面的 `/api/meetings` 接口。
+  有的工具不能改自己的配置，它会告诉你该往哪个文件里加什么。
+
+不开界面也行，效果和打开那两个开关一样：
+
 ```bash
 uv run python -m avatar.connect
 ```
 
-只需运行一次。它在本机的 Claude Code 和 Codex 里各登记一个叫 `meetings` 的只读工具。之后在任何项目里
-对它们说「看下刚才的会」「上次会上分给我什么事」「会上关于供应商接口怎么说的」，它们会自己去读：
+接上之后有三个工具：
 
 | 工具 | 作用 |
 |---|---|
@@ -144,7 +210,9 @@ uv run python -m avatar.connect
 | `read_meeting` | 读一场会（默认最近一场）；可以只要纪要、只要整理稿或只要逐句对话；长会分页读。正在开的会也读得到 |
 | `search_meetings` | 在所有会议里搜关键词 |
 
-这个工具直接读文件，后台没在运行也能用。取消登记：`uv run python -m avatar.connect --remove`。
+登记给 Claude Code 和 Codex 的是本地命令方式，直接读文件，后台没在运行也能用。取消登记：关掉开关，或者
+`uv run python -m avatar.connect --remove`。工具只能读；要让智能体重新整理纪要，调 `POST /api/meetings/{id}/minutes`。
+`/mcp` 只给这台电脑上的程序用：浏览器里别的网站的页面发来的请求会被拒绝。
 
 ## 接口
 
@@ -166,6 +234,9 @@ uv run python -m avatar.connect
 | GET | `/api/meetings` | 会议记录列表，新的在前：编号、起止时间、标题、句数、说话人、有没有纪要、文件路径 |
 | GET | `/api/meetings/{id}` | 一场会的完整内容（Markdown 文本）；`id` 写 `latest` 是最近一场 |
 | POST | `/api/meetings/{id}/minutes` | 整理（或重新整理）这场会的纪要和整理稿，后台进行。纪要好了事件流里有 `minutes` 事件；整理稿晚一些，补进记录后再发一次 `meetings` 事件 |
+| GET | `/api/agents` | 会议记录接给了哪些智能体：`clients` 里每个有 `id`（`claude` / `codex`）和 `state`（`on` 已接上 / `off` 没接 / `missing` 没装 / `taken` 那边有个同名的别的服务 / `unknown` 没能确认）；`guide` 是写给别的智能体看的接入说明，`mcp`、`api` 是其中的地址。要去问本机的 Claude Code 和 Codex，会花一两秒 |
+| PUT | `/api/agents/{id}` `{connected}` | 把会议记录接给这个智能体，或者取消。动不了时回 409 和原因。成了之后事件流里有 `agents` 事件 |
+| POST | `/mcp` | HTTP 方式的 MCP（一问一答，回 JSON），工具和登记给 Claude Code 的那套一样：`list_meetings`、`read_meeting`、`search_meetings`，都是只读的 |
 | WS | `/ws/events` | 状态事件流，连接后先收到全量快照 |
 | WS | `/ws/audio` | 主窗口的音频通道（同一时间只有一个窗口负责收音和播放） |
 
@@ -184,6 +255,8 @@ uv run python -m avatar.connect
 | `#settings` 里带 `name` 的每一项、每一组几选一（`data-setting`） | `PATCH /api/settings` |
 | 「记录」里的 `#btn-meetings`、`.meeting[data-meeting-id]` | `GET /api/meetings`、`GET /api/meetings/{id}` |
 | `#btn-minutes` 整理纪要 | `POST /api/meetings/{id}/minutes` |
+| `#agent-claude`、`#agent-codex` 开关（`aria-checked` 是接没接上） | `PUT /api/agents/{id}` |
+| `#btn-copy-agent-guide` 复制一段话发给它 | `GET /api/agents` 的 `guide` |
 
 `#avatar-grip` 罩在形象身上：按住它左右拖，形象跟着转身，松手带一点惯性，几秒后自己转回正面；点一下（不拖）他做一个小动作。
 只是看着玩，不改任何状态，所以没有对应接口；它周围的空白照旧用来拖动窗口。
@@ -205,6 +278,9 @@ uv run python -m avatar.connect
 | `voice`、`speed` | 嗓音、语速 | `set-voice`、`set-speed` |
 
 `/api/state` 里的 `projects` 是它认出来的项目，`minuting` 是正在整理纪要的会议。
+`stage_online` 是有没有窗口接通了声音，`mic_online` 是那个窗口的麦克风声音有没有真的送到后台：
+开着会、`stage_online` 为真而 `mic_online` 为假，就是它现在只能说、听不到（耳机断开、麦克风被拔掉），
+主窗口会自己重新接麦克风，接不上时在顶部提示（`#btn-mic-retry` 重试）。事件流里这两项都走 `flag` 事件。
 
 ## 代码结构
 
@@ -218,7 +294,7 @@ uv run python -m avatar.connect
 | `avatar/mouth.py` | 语音合成：本地优先，在线和系统语音兜底 |
 | `avatar/meeting.py`、`speakers.py`、`config.py` | 会议状态、说话人、设置 |
 | `avatar/archive.py` | 会议记录：写盘（去语气词、并成段）、列表、读取、纪要和整理稿 |
-| `avatar/mcp_server.py`、`connect.py` | 把会议记录接给本机的 Claude Code 和 Codex |
+| `avatar/mcp_server.py`、`connect.py` | 把会议记录接给你自己的智能体：只读的 MCP 工具；登记到本机的 Claude Code 和 Codex；写给别的智能体看的接入说明 |
 | `avatar/api.py` | REST 和 WebSocket |
 | `avatar/web/stage.*` | 主窗口：形象、资料板、字幕、提示、控制条 |
 | `avatar/web/panel.*` | 设置窗口：记录和设置 |
@@ -231,14 +307,15 @@ uv run python -m avatar.connect
 
 ## 换形象
 
-现在的形象是「可爱屠夫打工人」：造型在 `~/Documents/3D-Characters/cute-butcher/`（`build_character.py` 生成 `cute-butcher.blend`，
-静态、没有骨骼）；`tools/figure.py` 读它，绑骨、给每种状态做动作，导出 `avatar/web/models/figure.glb`。
+现在的形象是「可爱屠夫打工人」，做好的文件就是仓库里的 `avatar/web/models/figure.glb`，装上直接能用。
+它是这样来的：原始造型是一个静态、没有骨骼的 Blender 文件（`cute-butcher.blend`，不在这个仓库里）；
+`tools/figure.py` 读它，绑骨、给每种状态做动作，导出成 GLB。
 原模型是照着正面做的，前后很薄，所以脚本还会把身体、头和腿前后撑厚，在后腰加一个围裙带子的结，
 并把缝隙里的阴影烘进顶点色，这样拖着转到侧面和背面也有体积。原模型腰间的钩子太细，脚本把它换成了一把大肉钩
-（粗环、裹皮的柄、带刃口和倒刺的弯钩，拴着一条铁链）。改了造型或动作后重跑：
+（粗环、裹皮的柄、带刃口和倒刺的弯钩，拴着一条铁链）。手上有原始造型文件时，改了造型或动作后重跑（`--src` 指到那个 `.blend`）：
 
 ```sh
-/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python tools/figure.py
+/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python tools/figure.py -- --src 造型.blend
 ```
 
 | 状态 | 身体（动作片段，在 `tools/figure.py` 的 `CLIPS` 里） | 脸（页面按实时数据驱动，在 `model.js` 的 `FACE` 里） |
@@ -255,7 +332,7 @@ uv run python -m avatar.connect
 
 状态色出现在脚下的光圈、轮廓光、耳机两侧的标志和电脑上；后台在干活时有两颗小光球绕着头转。
 
-换别的模型：把 GLB 放进 `avatar/web/models/`（这个目录不进 git），刷新就生效，不用改代码。
+换别的模型：把 GLB 放进 `avatar/web/models/`（除了自带的 `figure.glb`，这个目录里的文件不进 git），刷新就生效，不用改代码。
 
 - `名字.glb`：形象本体。动作片段叫状态名就在那种状态播；只有静态模型也能用，靠整体起伏和点头表现神态。
 - `名字.thinking.glb` 这样的文件：那种状态单独的动作，可选，要和本体是同一副骨骼。
@@ -291,3 +368,20 @@ uv run python -m tests.scenarios   # 用真实大脑演练十几种会议场景�
 - 网络断断续续时它会说「网络有点卡」，连上后再把问题答了；完全断网时只有字幕和会议记录能用。
 - 本机 `claude` 命令行版本较旧时，干活只能用它的默认模型；`claude update` 之后可以在设置里换。
 - 在线嗓音更自然，但依赖网络；网络不稳时会自动退回本地嗓音。
+
+## 隐私
+
+- 声音不离开这台电脑：识别、断句、声纹都在本地；选了在线嗓音时，它要说的文字会发给在线语音服务。
+- 会议里的文字会发给你的 Claude（接话、查东西、整理纪要都靠它），走的是你本机 `claude` 命令行的登录。
+- 会议记录和设置只存在本机的 `workspace/` 里，这个目录不进 git。把项目拷给别人时用 `git clone`，不要直接压缩整个文件夹。
+- 把会议记录接给你的智能体之后，它在任何项目里都能读到所有场次，读到的内容会随对话发给它背后的模型服务。
+
+## 参与开发
+
+改界面不需要模型和 Claude，用上面的演示后台就行。设计原则、目录约定和改完要回归哪些地方写在 [CLAUDE.md](CLAUDE.md) 里，
+人和 AI 编程助手都按它来。提交前跑一遍 `uv run pytest`。
+
+## 许可证
+
+[MIT](LICENSE)。界面里的 three.js 放在 `avatar/web/vendor/three/`，许可证在同一目录；语音模型运行时从各自的官方仓库下载，
+不在本仓库里，各有各的许可证。

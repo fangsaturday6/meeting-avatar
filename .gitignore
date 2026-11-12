@@ -1,7 +1,9 @@
 .venv/
 __pycache__/
 *.pyc
-models/
+/models/
+avatar/web/models/*
+!avatar/web/models/figure.glb
 workspace/
 .pytest_cache/
 .DS_Store
