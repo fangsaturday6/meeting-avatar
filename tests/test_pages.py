@@ -9,7 +9,7 @@ from avatar import demo
 from avatar.api import create_app
 
 # 界面元素的稳定名字。AI Agent 和桌面应用的菜单靠这些 id 找按钮，改版时不能改名。
-STAGE_IDS = ["stage", "avatar", "status-text", "ai-tag", "board", "board-kind", "board-brief", "board-body", "board-open",
+STAGE_IDS = ["stage", "avatar", "avatar-grip", "status-text", "ai-tag", "board", "board-kind", "board-brief", "board-body", "board-open",
              "btn-board-close", "caption", "alerts", "dock", "btn-start", "btn-mute", "btn-hush", "btn-stop",
              "btn-notes", "btn-settings"]
 PANEL_IDS = ["panel", "tab-notes", "tab-settings", "alerts", "btn-meetings", "tasks", "transcript", "composer", "say-kind",

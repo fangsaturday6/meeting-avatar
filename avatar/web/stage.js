@@ -260,10 +260,10 @@ async function chooseFigure() {
 // 3D 形象起不来（没有 WebGL）就退回 2D 形象
 Promise.all([import('./character.js'), chooseFigure()])
   .then(([{ mountCharacter }, model]) => {
-    figure = mountCharacter($('avatar'), { bust: params.has('bust'), model });
+    figure = mountCharacter($('avatar'), { bust: params.has('bust'), model, grip: $('avatar-grip') });
     if (params.has('mouth')) figure.setMouth(+params.get('mouth') || 0);
   })
-  .catch(() => { figure = { setState() {}, ...mountAvatar($('avatar')) }; })
+  .catch(() => { $('avatar-grip').hidden = true; figure = { setState() {}, ...mountAvatar($('avatar')) }; })
   .finally(renderScene);
 
 connectEvents(state, render);

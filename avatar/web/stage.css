@@ -12,6 +12,9 @@ body { overflow: hidden; }
 #presence { grid-area: presence; min-width: 0; min-height: 0; position: relative; container-type: size; }
 #avatar { position: absolute; inset: 0; }
 #avatar .character { width: 100%; height: 100%; display: block; }
+/* 罩在它身上的一块：按住左右拖让它转身。只盖住人，周围的空白照旧拖窗口 */
+#avatar-grip { position: absolute; left: 50%; top: 47%; translate: -50% -50%; width: min(64cqw, 58cqh); height: 74cqh; cursor: grab; touch-action: none; -webkit-app-region: no-drag; }
+#avatar-grip[data-dragging] { cursor: grabbing; }
 #avatar .av { position: absolute; left: 50%; top: 44%; translate: -50% -50%; width: min(70cqw, 56cqh); height: min(70cqw, 56cqh); }   /* 不支持 3D 时的 2D 形象 */
 
 /* 字幕：压在它脚下 */

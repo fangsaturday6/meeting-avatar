@@ -258,7 +258,11 @@ const POSES = {
 };
 const HEARING = { lid: -0.3, brow: 0.6, lean: 0.07, headZ: -0.06 };
 
-export function mountCharacter(root, { bust = false, model = null } = {}) {
+const TURN = Math.PI * 2;
+const SPIN_PER_PX = 0.011;     // 拖一个像素转多少弧度（拖过大半个身子正好转一圈）
+const SPIN_HOME = 3;           // 松手几秒后自己转回正面
+
+export function mountCharacter(root, { bust = false, model = null, grip = null } = {}) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });   // 不支持 WebGL 时这里会抛错，由调用方退回 2D 形象
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -347,6 +351,33 @@ export function mountCharacter(root, { bust = false, model = null } = {}) {
 
   const clock = new THREE.Clock();
   const still = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  // 拖动转身：按住它左右拖，松手带一点惯性，过一会儿自己转回正面
+  const spin = { angle: 0, speed: 0, held: false, x: 0, at: 0, freeAt: 0 };
+  if (grip) {
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button) return;
+      Object.assign(spin, { held: true, speed: 0, x: e.clientX, at: performance.now() });
+      grip.setPointerCapture(e.pointerId);
+      grip.dataset.dragging = '1';
+    });
+    grip.addEventListener('pointermove', (e) => {
+      if (!spin.held) return;
+      const now = performance.now(), step = (e.clientX - spin.x) * SPIN_PER_PX;
+      spin.angle += step;
+      spin.speed += (step / Math.max(0.008, (now - spin.at) / 1000) - spin.speed) * 0.5;     // 平滑一下，甩出去才顺
+      spin.x = e.clientX; spin.at = now;
+    });
+    const release = () => {
+      if (!spin.held) return;
+      spin.held = false;
+      if (performance.now() - spin.at > 90 || still.matches) spin.speed = 0;                  // 停住了再松手：不甩
+      spin.freeAt = clock.elapsedTime;
+      delete grip.dataset.dragging;
+    };
+    grip.addEventListener('pointerup', release);
+    grip.addEventListener('pointercancel', release);
+  }
   function frame() {
     const dt = Math.min(clock.getDelta(), 0.25), t = clock.elapsedTime;
     const live = st.status !== 'off', calm = still.matches ? 0 : 1;
@@ -368,7 +399,13 @@ export function mountCharacter(root, { bust = false, model = null } = {}) {
     J.torso.scale.set(1 + breath * 0.008, 1 + breath * 0.014, 1 + breath * 0.02);
     J.body.rotation.x = cur.lean + mouth * 0.015;
     J.body.rotation.z = Math.sin(t * 0.55) * 0.012 * calm * (live ? 1 : 0);
-    J.body.rotation.y = -0.1;
+    if (!spin.held) {
+      spin.angle += spin.speed * dt;
+      spin.speed *= Math.exp(-dt * 2.4);
+      if (t - spin.freeAt > SPIN_HOME) spin.angle += (Math.round(spin.angle / TURN) * TURN - spin.angle) * ease(3);
+    }
+    J.body.rotation.y = -0.1 + spin.angle;
+    if (file) file.root.rotation.y = spin.angle;
     J.head.position.y = 2.54 + breath * 0.014;
 
     // 头

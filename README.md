@@ -178,6 +178,9 @@ uv run python -m avatar.connect
 | 「记录」里的 `#btn-meetings`、`.meeting[data-meeting-id]` | `GET /api/meetings`、`GET /api/meetings/{id}` |
 | `#btn-minutes` 整理纪要 | `POST /api/meetings/{id}/minutes` |
 
+`#avatar-grip` 罩在形象身上：按住它左右拖，形象跟着转身，松手带一点惯性，几秒后自己转回正面。只是换个角度看，
+不改任何状态，所以没有对应接口；它周围的空白照旧用来拖动窗口。
+
 主窗口的网址参数：`?autostart=1` 会议一开始就免点击接通声音（桌面应用默认带）；
 `?pose=thinking&hearing&working&muted` 强行指定神态，看效果和截图用。
 
