@@ -68,7 +68,7 @@ def split_minutes(raw: str) -> tuple[str, str]:
     title = _one_line(lines[0]).strip("#*「」《》\"' ").removeprefix("标题：").removeprefix("标题:").strip()
     body = "\n".join(lines[1:]).strip()
     if title.startswith(NO_CONTENT) or not body:
-        return (NO_CONTENT, "") if title.startswith(NO_CONTENT) else (title[:30], body)
+        return NO_CONTENT, ""       # 只有一行、没有正文：不管它怎么措辞，都是「没有可整理的内容」
     return title[:30], body
 
 

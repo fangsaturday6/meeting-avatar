@@ -185,6 +185,7 @@ function renderReader() {
   $('btn-copy-path').disabled = !row;
   const failed = state.minutes_result && state.minutes_result.id === r.id ? state.minutes_result.state : '';
   const note = r.error ? esc(r.error)
+    : rec.meta.recovered === 'yes' && !failed ? '这场会是事后从运行日志里恢复的：别人说的话基本完整，它的长回答只留下了开头'
     : failed === 'failed' ? '纪要没整理成，多半是网络不稳，过一会儿再点一次'
     : failed === 'empty' || (row && row.minutes === 'none') ? '这场会没有可以整理的实质内容' : '';
   $('reader-body').innerHTML = `
