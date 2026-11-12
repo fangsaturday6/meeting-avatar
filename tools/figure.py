@@ -49,7 +49,7 @@ def activate(obj, *others):
 HEAD_DEPTH = 1.25                # 头和脸上的东西整体前后放大多少
 LEG_DEPTH = 1.18                 # 腿和鞋：身体厚了，腿也跟着粗一点
 HEAD_PARTS = ("head", "jaw", "neck", "eyeL", "eyeR", "browL", "browR")
-ANCHORS = {"hook": Vector((1.16, -0.8, 2.6)), "chest": Vector((-0.8, 0.55, 4.3))}    # 钩子、背上的刀：不变形，跟着挂它的地方平移
+ANCHORS = {"hook": Vector((1.16, -0.8, 2.6)), "chest": Vector((-0.8, 0.55, 4.3))}    # 腰间挂钩子的地方、背上的刀：不变形，跟着身体平移
 
 
 def smooth(a, b, x):
@@ -67,7 +67,7 @@ def body_depth(p):
 def fatten(parts):
     for obj, how in parts:
         m, inv = obj.matrix_world, obj.matrix_world.inverted()
-        shift = ANCHORS[how].y * (body_depth(ANCHORS[how]) - 1) if how in ANCHORS else 0
+        shift = ANCHORS[how].y * (body_depth(ANCHORS[how]) - 1) if how in ANCHORS else 0     # 这时道具还没加进来，how 都是骨骼名
         if not (how in ("auto", "skin", "hips") or how in HEAD_PARTS or shift):
             continue
         for v in obj.data.vertices:
@@ -104,9 +104,37 @@ for _sx, _s in ((-1, "R"), (1, "L")):
               (f"brow{_s}", (_sx * 0.32, 0.6, 5.70), (_sx * 0.32, -0.92, 5.72), "head", False)]
 # 道具排在最后：摆姿势时要先算出手在哪，才能把道具放到手里
 LAPTOP = Vector((0.1, -2.0, 3.0))        # 笔记本电脑底座的中心：肚子前面，屏幕顶到胡子底下，不挡脸
-BONES += [("hook", (1.16, HOOK_Y, 2.6), (1.5, HOOK_Y - 0.1, 1.5), "spine", False),          # 腰间的钩子：会晃，能摘下来甩出去
+LOOP = Vector((1.16, HOOK_Y, 2.6))        # 钩子顶上的环：挂在腰带上的地方，也是铁链拴的地方
+HOOK_R, HOOK_DROP = 0.62, 0.95            # 弯钩的半径、钩柄从环心往下多长才开始弯
+
+
+def hook_path():
+    """大肉钩的中线，画在正面看得见的平面里（x 往人物左边，z 往上，原点是环心）。
+    每一段：(x, z, 朝里的方向, 钩身半宽, 半厚, 刃口往里伸多少倍)。先是直柄，再是大半圈弯钩，最后收成尖"""
+    out = [(0, -0.19, (1, 0), 0.085, 0.075, 1.0), (0, -HOOK_DROP, (1, 0), 0.10, 0.08, 1.0)]
+    steps = 30
+    for i in range(1, steps + 1):
+        t = i / steps
+        ang = math.radians(180 + 222 * t)                    # 从柄底往下、往外、再往上兜回来
+        x, z = HOOK_R + HOOK_R * math.cos(ang), -HOOK_DROP + HOOK_R * math.sin(ang)
+        belly = math.sin(min(1.0, t * 1.5) * math.pi / 2)    # 钩肚最厚，往尖上收
+        out.append((x, z, (-math.cos(ang), -math.sin(ang)), 0.10 + 0.06 * belly - 0.145 * t ** 2.4, 0.08 - 0.065 * t ** 1.6, 1.0 + 0.9 * min(1.0, t * 3)))
+    x, z, n = out[-1][:3]
+    out.append((x - n[1] * 0.32 + n[0] * 0.09, z + n[0] * 0.32 + n[1] * 0.09, n, 0.004, 0.004, 1.0))  # 钩尖：顺着再伸一段，略往里勾
+    return out
+
+
+HOOK_SHAPE = hook_path()
+TIP = LOOP + Vector((HOOK_SHAPE[-1][0], 0, HOOK_SHAPE[-1][1]))        # 钩尖
+HOOK_AXIS = LOOP + Vector((0.5, 0, -1.2))                             # 钩子骨骼指向钩身的重心：甩出去时这头朝前
+DROPS = [f"blood{i}" for i in range(1, 6)]  # 几滴血
+BONES += [("hook", tuple(LOOP), tuple(HOOK_AXIS), "spine", False),                          # 腰间的钩子：会晃，能摘下来甩出去
+          ("rope", tuple(LOOP), tuple(HOOK_AXIS), "spine", False),                          # 铁链的另一头：平时和钩子叠在一起（链节缩成一团），甩出去时留在手里
+          ("stain", tuple(TIP), tuple(TIP + Vector((0, 0, 0.2))), "hook", False),           # 钩尖上的血
+          *[(name, tuple(TIP), tuple(TIP + Vector((0, 0, 0.2))), "spine", False) for name in DROPS],
           ("laptop", tuple(LAPTOP), tuple(LAPTOP + Vector((0, -0.5, 0))), "spine", False)]  # 电脑：平时收着，页面在干活时把它放大出来
-ANIMATED = ["hips", "spine", "belly", "chest", "neck", "head", "armR", "forearmR", "handR", "armL", "forearmL", "handL", "hook"]
+UNSEEN = ["stain", *DROPS]                # 平时缩到看不见的骨骼（动作里要显示时才放大）
+ANIMATED = ["hips", "spine", "belly", "chest", "neck", "head", "armR", "forearmR", "handR", "armL", "forearmL", "handL", "hook", "rope"]
 
 
 def bone_for(name, x):
@@ -231,6 +259,133 @@ def add_laptop(character):
     return out
 
 
+def ball(character, name, center, radii, material, seg=12):
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=seg, v_segments=max(6, seg // 2 + 1), radius=1,
+                              matrix=Matrix.Translation(center) @ Matrix.Diagonal((*radii, 1)))
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    for p in me.polygons:
+        p.use_smooth = True
+    me.materials.append(material)
+    obj = bpy.data.objects.new(name, me)
+    character.objects.link(obj)
+    return obj
+
+
+def metal(name, color, roughness):
+    m = bpy.data.materials.new(name)
+    m.use_nodes = True
+    bsdf = m.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs["Base Color"].default_value = (*color, 1)
+    bsdf.inputs["Metallic"].default_value, bsdf.inputs["Roughness"].default_value = 0.9, roughness
+    return m
+
+
+def finish(character, name, bm, materials, sharp=32):
+    """bmesh → 物体。夹角大的棱保持锐利：锻打出来的铁器要有棱有角"""
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    for e in bm.edges:
+        e.smooth = len(e.link_faces) == 2 and e.calc_face_angle() < math.radians(sharp)
+    for f in bm.faces:
+        f.smooth = True
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    for m in materials:
+        me.materials.append(m)
+    obj = bpy.data.objects.new(name, me)
+    character.objects.link(obj)
+    return obj
+
+
+def sweep(bm, path, seg=8, edge=None):
+    """沿 hook_path 那样的中线扫出钩身：截面朝里的一侧拉成刃口。edge 给了就把刃口两边的面标成第二种材质（磨亮的钢）"""
+    rings = []
+    for x, z, n, a, b, blade in path:
+        c, inward, side = LOOP + Vector((x, 0, z)), Vector((n[0], 0, n[1])), Vector((0, 1, 0))
+        rings.append([bm.verts.new(c + inward * a * math.cos(k) * (blade if abs(k) < 0.1 else 1) + side * b * math.sin(k))
+                      for k in (2 * math.pi * j / seg for j in range(seg))])
+    for r0, r1 in zip(rings, rings[1:]):
+        for j in range(seg):
+            f = bm.faces.new((r0[j], r0[(j + 1) % seg], r1[(j + 1) % seg], r1[j]))
+            if edge is not None and j in (0, seg - 1):
+                f.material_index = edge
+    bm.faces.new(rings[0])
+    bm.faces.new(rings[-1])
+
+
+def spike(bm, at, toward, length, radius):
+    """一根倒刺：从钩身上斜着长出来，越来越尖"""
+    at, toward = Vector(at), Vector(toward).normalized()
+    turn = Vector((0, 0, 1)).rotation_difference(toward).to_matrix().to_4x4()
+    bmesh.ops.create_cone(bm, cap_ends=True, segments=6, radius1=radius, radius2=0.004, depth=length,
+                          matrix=Matrix.Translation(at + toward * length / 2) @ turn @ Matrix.Diagonal((1, 0.6, 1, 1)))
+
+
+def add_hook(character, leather):
+    """大肉钩：粗环、裹皮的柄、厚重的弯钩、磨亮的刃口、两根倒刺"""
+    iron, steel = metal("Hook iron", (0.075, 0.08, 0.095), 0.5), metal("Hook edge", (0.78, 0.81, 0.85), 0.22)
+    shape = HOOK_SHAPE
+    bm = bmesh.new()
+    sweep(bm, shape, edge=1)
+    for i, length, radius in ((9, 0.36, 0.10), (26, 0.42, 0.085)):                     # 钩肚外侧一根、钩尖背后一根（倒刺）
+        x, z, n = shape[i][:3]
+        back = Vector((n[1], 0, -n[0])) if i > 20 else Vector((0, 0, 0))               # 钩尖那根往回撇，扎进去就拔不出来
+        spike(bm, LOOP + Vector((x - n[0] * shape[i][3] * 0.6, 0, z - n[1] * shape[i][3] * 0.6)), Vector((-n[0], 0, -n[1])) + back * 1.1, length, radius)
+    body = finish(character, "Meat hook", bm, [iron, steel])
+
+    bm = bmesh.new()                                                                   # 顶上的粗环
+    sweep(bm, [(0.19 * math.cos(k), 0.19 * math.sin(k), (-math.cos(k), -math.sin(k)), 0.06, 0.06, 1.0)
+               for k in (2 * math.pi * j / 20 for j in range(21))], seg=6)
+    ring = finish(character, "Meat hook ring", bm, [iron])
+
+    bm = bmesh.new()                                                                   # 柄上的铁箍
+    for z in (-0.25, -0.86):
+        sweep(bm, [(0, z + 0.05, (1, 0), 0.125, 0.115, 1.0), (0, z - 0.05, (1, 0), 0.125, 0.115, 1.0)], seg=8)
+    bands = finish(character, "Meat hook bands", bm, [steel])
+
+    bm = bmesh.new()                                                                   # 裹在柄上的皮条：一圈一圈
+    for i in range(6):
+        z = -0.34 - i * 0.085
+        sweep(bm, [(0, z + 0.04, (1, 0), 0.108 - 0.004 * (i % 2), 0.10, 1.0), (0, z - 0.04, (1, 0), 0.108 - 0.004 * (i % 2), 0.10, 1.0)], seg=10)
+    grip = finish(character, "Meat hook grip", bm, [leather], sharp=60)
+    return [(body, "hook"), (ring, "hook"), (bands, "hook"), (grip, "hook")]
+
+
+def add_chain_and_blood(character):
+    """甩钩子用的铁链和血。
+    铁链是一串链节，全都叠在钩环上，相邻两节互相垂直；每一节按比例同时跟「钩子」和「链子另一头」两根骨骼，
+    两根骨骼一分开，链节就自动在中间排成一条链（两根骨骼朝向相同，链节才都顺着链子的方向）"""
+    iron = metal("Chain iron", (0.20, 0.21, 0.24), 0.4)
+    axis = (HOOK_AXIS - LOOP).normalized()
+    flat = [Vector((0, 1, 0)), axis.cross(Vector((0, 1, 0))).normalized()]
+    out, count = [], 24
+    for i in range(count):
+        a, side = (i + 0.5) / count, flat[i % 2]
+        normal, bm, rings = axis.cross(side), bmesh.new(), []
+        for k in (2 * math.pi * j / 14 for j in range(14)):                            # 一节：长圆形的环
+            c = LOOP + axis * 0.125 * math.cos(k) + side * 0.07 * math.sin(k)
+            out_dir = (axis * 0.07 * math.cos(k) + side * 0.125 * math.sin(k)).normalized()
+            rings.append([bm.verts.new(c + (out_dir * math.cos(q) + normal * math.sin(q)) * 0.026) for q in (2 * math.pi * j / 6 for j in range(6))])
+        for r0, r1 in zip(rings, rings[1:] + rings[:1]):
+            for j in range(6):
+                bm.faces.new((r0[j], r0[(j + 1) % 6], r1[(j + 1) % 6], r1[j]))
+        out.append((finish(character, "Chain link", bm, [iron], sharp=70), {"hook": 1 - a, "rope": a}))
+    blood = bpy.data.materials.new("Blood")
+    blood.use_nodes = True
+    bsdf = blood.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs["Base Color"].default_value = (0.42, 0.012, 0.02, 1)
+    bsdf.inputs["Roughness"].default_value = 0.22
+    near = LOOP + Vector((HOOK_SHAPE[-4][0], 0, HOOK_SHAPE[-4][1]))                     # 钩尖往回一点
+    out.append((ball(character, "Blood on hook", TIP, (0.13, 0.12, 0.17), blood), "stain"))
+    out.append((ball(character, "Blood on hook", near, (0.16, 0.14, 0.16), blood), "stain"))
+    for name, r in zip(DROPS, (0.15, 0.12, 0.10, 0.11, 0.09)):
+        out.append((ball(character, "Blood drop", TIP, (r, r, r * 1.25), blood), name))
+    return out
+
+
 def bind(arm, parts):
     """parts：[(物体, 绑法)]。衬衫用自动权重，贴在衬衫上的抄最近衬衫顶点的权重，其余整块跟一根骨骼"""
     torso = next(o for o, how in parts if how == "auto")
@@ -249,6 +404,9 @@ def bind(arm, parts):
                 near = int(np.argmin(((co - np.array(obj.matrix_world @ v.co)) ** 2).sum(axis=1)))
                 for name, w in weights[near]:
                     (obj.vertex_groups.get(name) or obj.vertex_groups.new(name=name)).add([v.index], w, "REPLACE")
+        elif isinstance(how, dict):                          # 按比例同时跟几根骨骼
+            for name, w in how.items():
+                obj.vertex_groups.new(name=name).add(range(len(obj.data.vertices)), w, "REPLACE")
         else:
             obj.vertex_groups.new(name=how).add(range(len(obj.data.vertices)), 1.0, "REPLACE")
     return torso
@@ -264,8 +422,8 @@ def shade(obj, rays=16, reach=1.5):
     me.vertices.foreach_get("co", co)
     me.vertices.foreach_get("normal", nrm)
     co, nrm = co.reshape(-1, 3), nrm.reshape(-1, 3)
-    away = {i for i, slot in enumerate(obj.vertex_groups) if slot.name.startswith("lid") or slot.name == "laptop"}
-    hidden = {v.index for v in me.vertices if any(g.group in away for g in v.groups)}      # 眼皮此刻合着、电脑平时不在：别让它们把身上挡黑
+    away = {i for i, slot in enumerate(obj.vertex_groups) if slot.name.startswith("lid") or slot.name in ("laptop", "rope", *UNSEEN)}
+    hidden = {v.index for v in me.vertices if any(g.group in away for g in v.groups)}      # 眼皮此刻合着，电脑、铁链、血平时不在：别让它们把身上挡黑
     faces = [tuple(p.vertices) for p in me.polygons if p.vertices[0] not in hidden]
     floor = len(co)
     points = [tuple(c) for c in co] + [(-9, -9, 0), (9, -9, 0), (9, 9, 0), (-9, 9, 0)]     # 加一块地面：脚底和裤脚会暗下去
@@ -305,8 +463,8 @@ def rot(x=0, y=0, z=0):
 
 def pose(arm, spec, last):
     """把一组姿势换算成每根骨骼自己的旋转、位移、缩放。姿势都按人物的坐标说：
-    aim 指向哪、rot 转多少度、move 挪多少、grab 抓在哪根骨骼的末端（道具用）、
-    squash 上下压扁或拉长（脚不离地）、scale 整体放大"""
+    aim 指向哪、rot 转多少度、move 挪多少、at 放到哪个位置、grab 抓在哪根骨骼的末端（道具用）、
+    squash 上下压扁或拉长（脚不离地）、scale 整体放大（UNSEEN 里的骨骼不写就是缩到看不见）"""
     world, head, tip = {}, {}, {}
     for b in arm.data.bones:            # 骨骼按建立顺序排，父在前
         rest, s = b.matrix_local.to_quaternion(), spec.get(b.name, {})
@@ -328,6 +486,8 @@ def pose(arm, spec, last):
         move, squash = Vector(s.get("move", (0, 0, 0))), s.get("squash", 1)
         if "grab" in s:
             move = tip[s["grab"]] + Vector(s.get("offset", (0, 0, 0))) - origin
+        if "at" in s:
+            move = Vector(s["at"]) - origin
         move.z -= b.head_local.z * (1 - squash)
         world[b.name] = up @ q
         head[b.name] = origin + move
@@ -336,8 +496,8 @@ def pose(arm, spec, last):
         pb.rotation_mode = "QUATERNION"
         pb.rotation_quaternion = q
         pb.location = up.inverted() @ move
-        wide = s.get("scale", 1) / math.sqrt(squash)
-        pb.scale = (wide, s.get("scale", 1) * squash, wide)
+        size = s.get("scale", 0.001 if b.name in UNSEEN else 1)
+        pb.scale = (size / math.sqrt(squash), size * squash, size / math.sqrt(squash))
 
 
 def loop(*keys, every):
@@ -366,6 +526,23 @@ TYPE = {"armL": aim(0.35, -0.65, -0.8), "forearmL": aim(-0.5, -0.85, -0.25), "ha
 EAR = {**RELAX, "armR": aim(-0.75, -0.25, 0.2), "forearmR": aim(0.62, 0.10, 0.78), "handR": aim(0.6, 0.2, 0.75)}
 REACH = {**RELAX, "armL": aim(0.45, -0.55, -0.7), "forearmL": aim(-0.475, -0.617, -0.633), "handL": aim(-0.4, -0.6, -0.6)}
 PAT = {**RELAX, "armL": aim(0.4, -0.7, -0.6), "handL": aim(-0.8, -0.5, -0.3)}
+# 甩钩子：往后抡、横着甩出去、拽、接
+FAR = Vector((-1.3, -4.2, 3.9))                              # 钩环飞到头的地方：他右前方（画面左边；钩身还要再伸出去一截，别出画）
+OUTWARD = aim(-0.66, -0.75, -0.05)                           # 钩子飞的时候弯钩朝前、环朝后，铁链拴在环上
+SEEN = {"scale": 1.0}
+def held(way):
+    """链子另一头攥在手里。朝向要和钩子一样，链节才顺着链子排"""
+    return {"rope": {"grab": "handL", **way}}
+
+
+BACK, DOWN = aim(0.4, 0.6, 0.7), aim(0.1, -0.4, -1)          # 抡到身后时、接回手里时钩子朝哪
+WIND = {**RELAX, "armL": aim(0.75, 0.2, 0.45), "forearmL": aim(0.3, 0.55, 0.8), "handL": aim(0.2, 0.6, 0.8),
+        "chest": rot(z=16), "spine": rot(z=7), "head": rot(z=-10), "hips": {"squash": 0.94}}
+FLING = {**RELAX, "armL": aim(0.15, -0.95, 0.05), "forearmL": aim(-0.6, -0.8, 0.05), "handL": aim(-0.7, -0.7, 0),
+         "chest": rot(x=6, z=-14), "spine": rot(z=-6), "head": rot(z=-8), "hips": {"squash": 1.03}}
+TUG = {**RELAX, "armL": aim(0.5, -0.6, 0.25), "forearmL": aim(-0.1, -0.5, 0.85), "handL": aim(0, -0.4, 0.9),
+       "chest": rot(x=-7, z=6), "spine": rot(x=-3), "head": rot(x=-4, z=-8), "hips": {"squash": 0.97}}
+CATCH = {**RELAX, "armL": aim(0.45, -0.75, 0.0), "forearmL": aim(-0.2, -0.85, 0.5), "handL": aim(-0.2, -0.7, 0.7)}
 UP = {"armL": aim(0.6, 0.1, 0.8), "forearmL": aim(0.25, 0.1, 1), "handL": aim(0.3, 0, 1),
       "armR": aim(-0.6, 0.1, 0.8), "forearmR": aim(-0.25, 0.1, 1), "handR": aim(-0.3, 0, 1)}
 CLIPS = {
@@ -417,21 +594,29 @@ CLIPS = {
                   (25, mix(RELAX, {"hips": {"squash": 1.06, "move": (0, 0, 0.45)}, "armL": rot(y=-14), "armR": rot(y=14), "hook": rot(y=-10)})),
                   (29, mix(RELAX, {"hips": {"squash": 0.82}, "belly": {"scale": 1.08}, "head": rot(x=8), "hook": rot(y=8)})),
                   (35, mix(RELAX, {"hips": {"squash": 1.04}, "belly": {"scale": 0.98}})), (44, RELAX)],
-    # 把腰间的钩子摘下来甩出去，飞一圈再接住挂回去
-    "idle-hook": [(1, RELAX), (12, REACH),
-                  (22, {**RELAX, "armL": aim(0.75, 0.15, 0.45), "forearmL": aim(0.2, 0.5, 0.85), "handL": aim(0.1, 0.6, 0.8), "chest": rot(z=12), "spine": rot(z=6),
-                        "head": rot(z=-6), "hook": {"grab": "handL", **rot(x=150)}, "hips": {"squash": 0.95}}),
-                  (29, {**RELAX, "armL": aim(0.2, -0.95, 0.15), "forearmL": aim(0.0, -1, 0.1), "handL": aim(0, -1, 0), "chest": rot(x=6, z=-12), "spine": rot(z=-5),
-                        "hook": {"grab": "handL", **rot(x=60)}, "hips": {"squash": 1.03}}),
-                  (36, {**RELAX, "armL": aim(0.25, -0.8, -0.3), "forearmL": aim(-0.1, -1, -0.1), "handL": aim(0, -1, -0.2), "chest": rot(x=5, z=-10),
-                        "hook": {"move": (-0.2, -3.6, 1.9), **rot(x=220)}}),
-                  (46, {**RELAX, "armL": aim(0.25, -0.8, -0.3), "forearmL": aim(-0.1, -1, -0.1), "handL": aim(0, -1, -0.2), "chest": rot(x=3, z=-6), "head": rot(x=-4),
-                        "hook": {"move": (-0.9, -6.6, 1.5), **rot(x=380)}}),
-                  (56, {**RELAX, "armL": aim(0.3, -0.9, 0.0), "forearmL": aim(0.0, -0.95, 0.3), "handL": aim(0, -1, 0.3), "chest": rot(x=1, z=-3),
-                        "hook": {"move": (-0.5, -3.4, 1.4), **rot(x=540)}}),
-                  (64, {**RELAX, "armL": aim(0.3, -0.9, 0.05), "forearmL": aim(0.0, -0.95, 0.35), "handL": aim(0, -1, 0.3), "chest": rot(x=-4), "head": rot(x=-3),
-                        "hook": {"grab": "handL", **rot(x=700)}, "belly": {"scale": 1.07}, "hips": {"squash": 0.96}}),
-                  (78, {**REACH, "hook": rot(x=720)}), (92, {**RELAX, "hook": rot(x=720)})],
+    # 甩钩子：摘下来往后一抡，带着铁链横着甩出去，到头溅血，一把拽回来接住
+    "idle-hook": [(1, RELAX), (8, REACH),
+                  (15, {**WIND, **held(BACK), "hook": {"grab": "handL", **BACK}}),
+                  (18, {**FLING, **held(OUTWARD), "hook": {"grab": "handL", **OUTWARD}}),
+                  (21, {**FLING, **held(OUTWARD), "hook": {"at": FAR * 0.94 + LOOP * 0.06, **OUTWARD}}),
+                  (22, {**FLING, **held(OUTWARD), "hook": {"at": FAR, **OUTWARD}, "stain": SEEN, "chest": rot(x=8, z=-16),
+                        "blood1": {"grab": "stain", **SEEN}, "blood2": {"grab": "stain", **SEEN}, "blood3": {"grab": "stain", **SEEN}}),
+                  (24, {**FLING, **held(OUTWARD), "hook": {"at": FAR + Vector((-0.12, 0, 0.05)), **OUTWARD}, "stain": SEEN, "chest": rot(x=8, z=-16),
+                        "blood1": {"at": FAR + Vector((-0.6, -0.3, 0.2)), **SEEN}, "blood2": {"at": FAR + Vector((-0.2, 0.3, 0.3)), **SEEN},
+                        "blood3": {"at": FAR + Vector((-0.5, 0.0, -0.9)), "scale": 0.9}}),
+                  (27, {**TUG, **held(OUTWARD), "hook": {"at": FAR + Vector((0.5, 0.3, 0.1)), **OUTWARD}, "stain": SEEN,
+                        "blood1": {"at": FAR + Vector((-1.0, -0.5, -0.9)), "scale": 0.7}, "blood2": {"at": FAR + Vector((-0.3, 0.5, -0.6)), "scale": 0.7},
+                        "blood3": {"at": FAR + Vector((-0.8, 0.0, -1.8)), "scale": 0.6}, "blood4": {"grab": "stain", **SEEN}}),
+                  (30, {**TUG, **held(OUTWARD), "hook": {"at": FAR * 0.45 + Vector((0.6, -0.9, 2.1)), **OUTWARD}, "stain": SEEN,
+                        "blood1": {"at": FAR + Vector((-1.2, -0.6, -2.4)), "scale": 0.3}, "blood2": {"at": FAR + Vector((-0.4, 0.6, -2.2)), "scale": 0.3},
+                        "blood3": {"at": FAR + Vector((-0.9, 0.0, -3.0))}, "blood4": {"at": FAR * 0.8 + Vector((0, 0, -0.5)), "scale": 0.8},
+                        "blood5": {"grab": "stain", **SEEN}}),
+                  (33, {**CATCH, **held(DOWN), "hook": {"grab": "handL", **DOWN}, "stain": SEEN, "belly": {"scale": 1.07}, "hips": {"squash": 0.95},
+                        "blood4": {"at": FAR * 0.8 + Vector((0, 0, -2.6)), "scale": 0.4}, "blood5": {"at": FAR * 0.4 + Vector((0.3, -0.9, 0.6)), "scale": 0.8}}),
+                  (38, {**CATCH, **held(DOWN), "hook": {"grab": "handL", **DOWN}, "stain": SEEN, "head": rot(x=8, z=10),
+                        "blood5": {"at": FAR * 0.4 + Vector((0.3, -0.9, -2.4)), "scale": 0.3}}),
+                  (44, {**CATCH, **held(DOWN), "hook": {"grab": "handL", **DOWN}, "stain": {"scale": 0.6}, "head": rot(x=8, z=10)}),
+                  (52, REACH), (60, RELAX)],
     # 伸个懒腰：两手举过头，往后仰
     "idle-stretch": [(1, RELAX), (22, {**UP, "chest": rot(x=-9), "head": rot(x=-14), "belly": {"scale": 1.08}, "hips": {"squash": 1.04}}),
                      (40, {**UP, "armL": aim(0.75, 0.15, 0.7), "armR": aim(-0.75, 0.15, 0.7), "chest": rot(x=-11, z=3), "head": rot(x=-16, z=4),
@@ -450,7 +635,7 @@ CLIPS = {
                   (50, mix(RELAX, {"chest": rot(z=-14), "head": rot(x=-4, z=-24), "spine": rot(z=-6, y=-1.5), "armL": rot(x=-10)})),
                   (66, mix(RELAX, {"chest": rot(z=-15), "head": rot(x=-2, z=-26), "spine": rot(z=-6, y=-1.5), "armL": rot(x=-10)})), (82, RELAX)],
 }
-MOVED, SCALED = ["hips", "hook"], ["belly", "hips"]          # 除了转动，还会挪位置、会缩放的骨骼
+MOVED, SCALED = ["hips", "hook", "rope", *DROPS], ["belly", "hips", *UNSEEN]      # 除了转动，还会挪位置、会缩放的骨骼
 
 
 def animate(arm):
@@ -494,10 +679,15 @@ def main():
             o.data.materials[0] = glow
 
     parts = [(o, bone_for(o.name, sum((o.matrix_world @ Vector(c)).x for c in o.bound_box) / 8)) for o in meshes]
+    for o in [o for o, how in parts if how == "hook"]:       # 原模型的钩子太细，像根钉子：拿掉，换成下面做的大肉钩
+        bpy.data.objects.remove(o)
+    parts = [(o, how) for o, how in parts if how != "hook"]
     fatten(parts)
     parts += add_lids(character, bpy.data.materials["Warm peach skin"])
     parts += add_bow(character, bpy.data.materials["Cognac apron"])
     parts += add_laptop(character)
+    parts += add_hook(character, bpy.data.materials["Cognac apron"])
+    parts += add_chain_and_blood(character)
     arm = build_rig()
     figure = bind(arm, parts)
     activate(figure, *[o for o, _ in parts])
@@ -513,7 +703,7 @@ def main():
     bpy.ops.export_scene.gltf(filepath=str(OUT), export_format="GLB", use_selection=True, export_yup=True, export_skins=True,
                               export_animations=True, export_animation_mode="ACTIONS", export_force_sampling=True,
                               export_def_bones=False, export_tangents=False, export_vertex_color="ACTIVE")
-    used = sorted({how for _, how in parts})
+    used = sorted({how if isinstance(how, str) else "+".join(how) for _, how in parts})
     print(f"FIGURE {OUT} {OUT.stat().st_size / 1e6:.1f}MB verts={len(figure.data.vertices)} clips={list(CLIPS)} binds={used}")
 
 

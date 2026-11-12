@@ -234,7 +234,8 @@ uv run python -m avatar.connect
 现在的形象是「可爱屠夫打工人」：造型在 `~/Documents/3D-Characters/cute-butcher/`（`build_character.py` 生成 `cute-butcher.blend`，
 静态、没有骨骼）；`tools/figure.py` 读它，绑骨、给每种状态做动作，导出 `avatar/web/models/figure.glb`。
 原模型是照着正面做的，前后很薄，所以脚本还会把身体、头和腿前后撑厚，在后腰加一个围裙带子的结，
-并把缝隙里的阴影烘进顶点色，这样拖着转到侧面和背面也有体积。改了造型或动作后重跑：
+并把缝隙里的阴影烘进顶点色，这样拖着转到侧面和背面也有体积。原模型腰间的钩子太细，脚本把它换成了一把大肉钩
+（粗环、裹皮的柄、带刃口和倒刺的弯钩，拴着一条铁链）。改了造型或动作后重跑：
 
 ```sh
 /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python tools/figure.py
@@ -249,7 +250,7 @@ uv run python -m avatar.connect
 | 想发言 `waiting` | 举左手挥，身子一颠一颠，腰间钩子跟着晃 | 抬眉 |
 | 在说 `speaking` | 左手在身前比划 | 胡子（下巴）按音量开合 |
 
-小动作（片段名以 `idle-` 开头）：扶耳机点头、原地跳、把钩子甩出去再接住、伸懒腰、拍肚子、左右张望。
+小动作（片段名以 `idle-` 开头）：扶耳机点头、原地跳、甩钩子（带着铁链横着甩出去，到头溅血，再一把拽回来接住）、伸懒腰、拍肚子、左右张望。
 点他一下（不拖动）会马上来一个；有人说话时他不做小动作，专心听。要加新的，在 `CLIPS` 里加一个 `idle-名字` 就行，页面不用改。
 
 状态色出现在脚下的光圈、轮廓光、耳机两侧的标志和电脑上；后台在干活时有两颗小光球绕着头转。

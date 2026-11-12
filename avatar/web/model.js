@@ -85,6 +85,7 @@ export async function loadModel(figure) {
   // 摆正：脚踩地面、站在正中、缩放到统一身高（道具先收起来，不算进身材里）
   const laptop = body.getObjectByName('laptop');
   if (laptop) laptop.scale.setScalar(0.001);
+  body.traverse((o) => { if (o.isBone && /^(stain|blood\d+)$/.test(o.name)) o.scale.setScalar(0.001); });   // 血：只在动作里出现
   body.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(body, true);
   const size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
