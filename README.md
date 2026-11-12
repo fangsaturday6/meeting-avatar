@@ -178,8 +178,8 @@ uv run python -m avatar.connect
 | 「记录」里的 `#btn-meetings`、`.meeting[data-meeting-id]` | `GET /api/meetings`、`GET /api/meetings/{id}` |
 | `#btn-minutes` 整理纪要 | `POST /api/meetings/{id}/minutes` |
 
-`#avatar-grip` 罩在形象身上：按住它左右拖，形象跟着转身，松手带一点惯性，几秒后自己转回正面。只是换个角度看，
-不改任何状态，所以没有对应接口；它周围的空白照旧用来拖动窗口。
+`#avatar-grip` 罩在形象身上：按住它左右拖，形象跟着转身，松手带一点惯性，几秒后自己转回正面；点一下（不拖）他做一个小动作。
+只是看着玩，不改任何状态，所以没有对应接口；它周围的空白照旧用来拖动窗口。
 
 主窗口的网址参数：`?autostart=1` 会议一开始就免点击接通声音（桌面应用默认带）；
 `?pose=thinking&hearing&working&muted` 强行指定神态，看效果和截图用。
@@ -225,7 +225,9 @@ uv run python -m avatar.connect
 ## 换形象
 
 现在的形象是「可爱屠夫打工人」：造型在 `~/Documents/3D-Characters/cute-butcher/`（`build_character.py` 生成 `cute-butcher.blend`，
-静态、没有骨骼）；`tools/figure.py` 读它，绑骨、给每种状态做动作，导出 `avatar/web/models/figure.glb`。改了造型或动作后重跑：
+静态、没有骨骼）；`tools/figure.py` 读它，绑骨、给每种状态做动作，导出 `avatar/web/models/figure.glb`。
+原模型是照着正面做的，前后很薄，所以脚本还会把身体、头和腿前后撑厚，在后腰加一个围裙带子的结，
+并把缝隙里的阴影烘进顶点色，这样拖着转到侧面和背面也有体积。改了造型或动作后重跑：
 
 ```sh
 /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python tools/figure.py
@@ -234,19 +236,24 @@ uv run python -m avatar.connect
 | 状态 | 身体（动作片段，在 `tools/figure.py` 的 `CLIPS` 里） | 脸（页面按实时数据驱动，在 `model.js` 的 `FACE` 里） |
 |---|---|---|
 | 未开会 `off` | 垂头弓背，慢呼吸 | 闭眼 |
-| 在听 `listening` | 站着呼吸，重心轻晃；有人说话时前倾 | 眨眼、眼神游移；有人说话时抬眉 |
+| 在听 `listening` | 站着呼吸，重心左右换；有人说话时前倾。没人说话时隔几秒自己做一个小动作 | 眨眼、眼神游移；有人说话时抬眉 |
+| 在听且后台在干活 `working` | 掏出笔记本电脑，托着敲键盘，偶尔抬头 | 眼睛看屏幕 |
 | 在想 `thinking` | 左手捋胡子，抬头 | 半眯眼，往斜上方看 |
-| 想发言 `waiting` | 举左手挥，腰间钩子跟着晃 | 抬眉 |
+| 想发言 `waiting` | 举左手挥，身子一颠一颠，腰间钩子跟着晃 | 抬眉 |
 | 在说 `speaking` | 左手在身前比划 | 胡子（下巴）按音量开合 |
 
-状态色出现在脚下的光圈、轮廓光和耳机两侧的标志上；后台在干活时有两颗小光球绕着头转。
+小动作（片段名以 `idle-` 开头）：扶耳机点头、原地跳、把钩子甩出去再接住、伸懒腰、拍肚子、左右张望。
+点他一下（不拖动）会马上来一个；有人说话时他不做小动作，专心听。要加新的，在 `CLIPS` 里加一个 `idle-名字` 就行，页面不用改。
+
+状态色出现在脚下的光圈、轮廓光、耳机两侧的标志和电脑上；后台在干活时有两颗小光球绕着头转。
 
 换别的模型：把 GLB 放进 `avatar/web/models/`（这个目录不进 git），刷新就生效，不用改代码。
 
 - `名字.glb`：形象本体。动作片段叫状态名就在那种状态播；只有静态模型也能用，靠整体起伏和点头表现神态。
 - `名字.thinking.glb` 这样的文件：那种状态单独的动作，可选，要和本体是同一副骨骼。
 - 目录里有多个形象时用叫 `figure.glb` 的，没有就用第一个；`/?model=名字` 临时看某一个，`/?model=0` 看代码搭的备用形象，
-  `/?pose=speaking&mouth=0.8` 看张嘴。
+  `/?pose=speaking&mouth=0.8` 看张嘴，`/?turn=135` 转过 135 度站着（看侧面和背面），
+  `/?pose=listening&act=idle-hook` 反复播某一个小动作。
 - 骨骼和材质的命名约定写在 `model.js` 开头。形象要原创，不要用现成游戏里的角色模型。
 
 ## 测试

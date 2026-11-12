@@ -262,7 +262,7 @@ const TURN = Math.PI * 2;
 const SPIN_PER_PX = 0.011;     // 拖一个像素转多少弧度（拖过大半个身子正好转一圈）
 const SPIN_HOME = 3;           // 松手几秒后自己转回正面
 
-export function mountCharacter(root, { bust = false, model = null, grip = null } = {}) {
+export function mountCharacter(root, { bust = false, model = null, grip = null, turn = 0 } = {}) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });   // 不支持 WebGL 时这里会抛错，由调用方退回 2D 形象
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -353,11 +353,12 @@ export function mountCharacter(root, { bust = false, model = null, grip = null }
   const still = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   // 拖动转身：按住它左右拖，松手带一点惯性，过一会儿自己转回正面
-  const spin = { angle: 0, speed: 0, held: false, x: 0, at: 0, freeAt: 0 };
+  // turn：平时面朝哪（弧度，0 = 正面）。看侧面、背面的效果时用
+  const spin = { angle: turn, speed: 0, held: false, x: 0, from: 0, at: 0, freeAt: 0 };
   if (grip) {
     grip.addEventListener('pointerdown', (e) => {
       if (e.button) return;
-      Object.assign(spin, { held: true, speed: 0, x: e.clientX, at: performance.now() });
+      Object.assign(spin, { held: true, speed: 0, x: e.clientX, at: performance.now(), from: e.clientX });
       grip.setPointerCapture(e.pointerId);
       grip.dataset.dragging = '1';
     });
@@ -371,6 +372,7 @@ export function mountCharacter(root, { bust = false, model = null, grip = null }
     const release = () => {
       if (!spin.held) return;
       spin.held = false;
+      if (Math.abs(spin.x - spin.from) < 5) file?.poke();                                     // 没怎么拖 = 点了他一下：让他做个小动作
       if (performance.now() - spin.at > 90 || still.matches) spin.speed = 0;                  // 停住了再松手：不甩
       spin.freeAt = clock.elapsedTime;
       delete grip.dataset.dragging;
@@ -402,7 +404,7 @@ export function mountCharacter(root, { bust = false, model = null, grip = null }
     if (!spin.held) {
       spin.angle += spin.speed * dt;
       spin.speed *= Math.exp(-dt * 2.4);
-      if (t - spin.freeAt > SPIN_HOME) spin.angle += (Math.round(spin.angle / TURN) * TURN - spin.angle) * ease(3);
+      if (t - spin.freeAt > SPIN_HOME) spin.angle += (turn + Math.round((spin.angle - turn) / TURN) * TURN - spin.angle) * ease(3);
     }
     J.body.rotation.y = -0.1 + spin.angle;
     if (file) file.root.rotation.y = spin.angle;

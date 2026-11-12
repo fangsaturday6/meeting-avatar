@@ -3,7 +3,8 @@
 //          ?pose=thinking&hearing&working&muted 强行指定神态（看效果、截图用）；
 //          ?bust 只留头和肩、不显示控制条（生成应用图标用）；
 //          ?model=名字 指定用 models/ 里的哪个形象，?model=0 用代码搭的那个（挑形象时对比用）；
-//          ?mouth=0.8 嘴张到多大（0~1，看说话时的口型用）。
+//          ?mouth=0.8 嘴张到多大（0~1，看说话时的口型用）；?turn=135 转过多少度站着（看侧面和背面用）；
+//          ?act=idle-jump 反复播某一个小动作（调动作用）。
 import { api, connectEvents, emptyState, esc, STATUS_TEXT } from './api.js';
 import { createAudioHost } from './audio.js';
 import { mountAvatar } from './avatar.js';
@@ -35,6 +36,7 @@ function look() {
     hearing: params.has('hearing') || state.humans_speaking,
     working: params.has('working') || running().length > 0,
     muted: params.has('muted') || state.muted,
+    only: params.get('act') || '',
   };
 }
 
@@ -260,7 +262,7 @@ async function chooseFigure() {
 // 3D 形象起不来（没有 WebGL）就退回 2D 形象
 Promise.all([import('./character.js'), chooseFigure()])
   .then(([{ mountCharacter }, model]) => {
-    figure = mountCharacter($('avatar'), { bust: params.has('bust'), model, grip: $('avatar-grip') });
+    figure = mountCharacter($('avatar'), { bust: params.has('bust'), model, grip: $('avatar-grip'), turn: (+params.get('turn') || 0) * Math.PI / 180 });
     if (params.has('mouth')) figure.setMouth(+params.get('mouth') || 0);
   })
   .catch(() => { $('avatar-grip').hidden = true; figure = { setState() {}, ...mountAvatar($('avatar')) }; })

@@ -1,7 +1,9 @@
 // 从文件加载的 3D 形象：avatar/web/models/<名字>.glb，另可带每种状态一个动作文件 <名字>.<状态>.glb。
 // 带骨骼和动作最好；只有一个静态模型也能用（靠整体起伏和点头表现神态）。
 // 和模型的约定（tools/figure.py 按这个导出，别的模型有多少算多少）：
-//   动作片段叫状态名（listening / thinking / waiting / speaking / off）就在那种状态播；
+//   动作片段叫状态名（listening / thinking / waiting / speaking / off）就在那种状态循环播；
+//   叫 working 的在「在听 + 后台在干活」时播（敲电脑），骨骼 laptop 带着电脑，只在这时放出来；
+//   叫 idle-* 的是小动作：在听、没人说话时隔几秒挑一个播一遍，点他一下也会来一个；
 //   骨骼 jaw、browL / browR、eyeL / eyeR 由这里按实时数据转（张嘴、抬眉、眼神），
 //   lidL / lidR 是眼皮：沿骨骼方向压扁 = 睁眼，放开 = 闭眼；
 //   名字以 glow 开头的材质叠上状态色。
@@ -11,6 +13,7 @@ import { GLTFLoader } from './vendor/three/GLTFLoader.js';
 
 const HEIGHT = 3.6;      // 和代码搭的形象一样高，镜头不用跟着改
 const FADE = 0.35;       // 动作之间过渡的秒数
+const REST_GAP = [3.5, 8];   // 两个小动作之间歇多少秒（最短、最长）
 // 模型文件自带多个动作时，每种状态按顺序找名字里带这些词的；都没有就用待机动作
 const WORDS = {
   off: ['sleep', 'sit'],
@@ -79,7 +82,9 @@ export async function loadModel(figure) {
     for (const m of [].concat(o.material)) if (!materials.includes(m)) materials.push(m);
   });
 
-  // 摆正：脚踩地面、站在正中、缩放到统一身高
+  // 摆正：脚踩地面、站在正中、缩放到统一身高（道具先收起来，不算进身材里）
+  const laptop = body.getObjectByName('laptop');
+  if (laptop) laptop.scale.setScalar(0.001);
   body.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(body, true);
   const size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
@@ -102,24 +107,44 @@ export async function loadModel(figure) {
   const mixer = new THREE.AnimationMixer(body);
   const extra = {};                        // 状态 → 单独文件里的动作
   const headRest = head ? head.quaternion.clone() : null;
-  let status = '', action = null, own = false;
+  const gestures = gltf.animations.filter((c) => c.name.startsWith('idle-'));
+  const canWork = gltf.animations.some((c) => c.name === 'working');
+  let base = '', action = null, own = false;       // base：现在循环播的是哪个片段
+  let gesture = null, nextAt = null, poked = false, lastGesture = null, shown = 0;
 
-  function play(next) {
-    status = next;
-    const found = extra[next] ? { clip: extra[next], own: true } : pick(gltf.animations, next);
-    own = found.own;
-    const to = found.clip ? mixer.clipAction(found.clip) : null;
+  function swap(to) {
     if (to === action) return;
     if (to) to.reset().fadeIn(FADE).play();
     if (action) action.fadeOut(FADE);
     action = to;
   }
 
+  // 循环播某个状态的动作
+  function play(name) {
+    base = name; gesture = null;
+    const found = extra[name] ? { clip: extra[name], own: true } : pick(gltf.animations, name);
+    own = found.own;
+    swap(found.clip ? mixer.clipAction(found.clip) : null);
+  }
+
+  // 做一个小动作：播一遍，停在最后一帧，等 update 里把它换回循环动作
+  function act(clip, t) {
+    const once = mixer.clipAction(clip);
+    once.setLoop(THREE.LoopOnce, 1); once.clampWhenFinished = true;
+    swap(once);
+    gesture = { until: t + clip.duration - FADE }; lastGesture = clip;
+  }
+
+  function nextGesture() {
+    const pool = gestures.filter((c) => c !== lastGesture);
+    return (pool.length ? pool : gestures)[Math.floor(Math.random() * (pool.length || gestures.length))];
+  }
+
   for (const [name, url] of Object.entries(figure.motions || {})) {
     loader.loadAsync(url).then((g) => {
       if (!g.animations.length) return;
       extra[name] = g.animations[0];
-      if (name === status) play(name);
+      if (name === base) play(name);
     }, () => {});
   }
 
@@ -128,11 +153,24 @@ export async function loadModel(figure) {
 
   return {
     root, materials,
+    // 点了他一下：在听的时候马上来一个小动作
+    poke() { poked = true; },
     // lv：{ mouth, ear, glow, tone, calm }，由 character.js 每帧算好传进来
     update(dt, t, st, lv) {
-      if (st.status !== status) play(st.status);
+      const want = st.only || (st.working && st.status === 'listening' && canWork ? 'working' : st.status);
+      const free = base === 'listening' && gestures.length > 0;       // 站着在听：可以做小动作
+      if (nextAt === null) nextAt = t + 2.5;
+      if (st.only && st.only.startsWith('idle-')) {                    // 只看某一个小动作（调动作用）：反复播
+        const clip = gestures.find((c) => c.name === st.only);
+        if (clip && (!gesture || t >= gesture.until + 0.8)) { base = 'listening'; own = true; action = null; mixer.stopAllAction(); act(clip, t); }
+      } else if (want !== base) play(want);
+      else if (gesture && t >= gesture.until) { play(base); nextAt = t + REST_GAP[0] + Math.random() * (REST_GAP[1] - REST_GAP[0]); }
+      else if (!gesture && free && (poked || (!st.hearing && lv.calm && t > nextAt))) act(nextGesture(), t);
+      poked = false;
+
       const live = st.status !== 'off', ease = 1 - Math.exp(-dt * 5.5);
       const tgt = { ...REST, ...CALM, ...(own ? {} : HINTS[st.status]), ...FACE[st.status] };
+      if (base === 'working') Object.assign(tgt, { lid: 0.18, eyeUp: -0.7 });      // 敲电脑：眼睛看屏幕
       if (st.hearing && st.status === 'listening') Object.assign(tgt, HEARING, { lean: 0.06 });
       for (const k in cur) cur[k] += (tgt[k] - cur[k]) * (k === 'lid' ? 1 - Math.exp(-dt * 12) : ease);
       if (t > lookAt) { lookX = (Math.random() - 0.5) * 0.4; lookY = (Math.random() - 0.5) * 0.25; lookAt = t + 1.8 + Math.random() * 2.6; }
@@ -142,6 +180,10 @@ export async function loadModel(figure) {
       if (head) head.quaternion.copy(headRest);          // 动作里没管头的时候，别让下面的偏转越加越多
       mixer.timeScale = live ? 1 : 0.35;
       mixer.update(dt);
+      if (laptop) {                                      // 电脑：干活时弹出来，别的时候收起
+        shown += ((base === 'working' ? 1 : 0) - shown) * (1 - Math.exp(-dt * 9));
+        laptop.scale.setScalar(Math.max(0.001, shown));
+      }
 
       // 整个人：没有动作文件时自己呼吸；想发言时踮一踮；说话时跟着声音微微起伏
       const breath = action ? 0 : Math.sin(t * (live ? 1.5 : 1)) * 0.008 * lv.calm;
