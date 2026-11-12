@@ -1,7 +1,8 @@
 # 会议数字人
 
-本机运行的 AI 与会者。后台是 Python（`avatar/`），界面是原生 HTML/JS，无构建（`avatar/web/`）。
-怎么启动、有哪些接口，见 README.md。
+本机运行的 AI 与会者。后台是 Python（`avatar/`）；界面是原生 HTML/JS，无构建（`avatar/web/`）；
+桌面外壳是 Electron（`app/`），只负责起后台、开窗口、菜单，不放界面逻辑。
+怎么启动、有哪些接口、界面元素和接口的对应关系，见 README.md。
 
 ## 设计原则（做任何界面改动都适用）
 
@@ -16,9 +17,22 @@
 - **开发**：状态（`api.js` 的 `reduce`）、接口（`api.js` 的 `api`）、视图分三层；一块界面一个函数，
   视图只读状态，不直接碰网络，不在模板字符串里堆逻辑。
 - **AI Agent**：界面上能做的每件事都有对应接口（README 的接口表要同步更新）；按钮、表单项、关键元素
-  有稳定的 `id`，改版时不改名，Agent 不读页面也能做同样的事。
+  有稳定的 `id`，改版时不改名（清单在 `tests/test_pages.py`，加了新元素就补进去），Agent 不读页面也能做同样的事。
 - **改完回归**：开始/结束会议、接通声音、打字发言、静音、让它停下、说话人改名、派任务、资料板、
   每一项设置，逐项过一遍；浅色、深色、窄屏各看一眼；`uv run pytest` 要过。
+
+## 界面怎么看、怎么改
+
+- 主窗口只放它本人（`stage.*`）。新东西先想能不能用它的动作、颜色表达，其次放进设置窗口（`panel.*`），
+  不往主窗口上加文字和按钮。
+- 改界面用演示后台，不需要模型和 Claude：`uv run python -m avatar.demo`（8767 端口，`--autoplay` 自动演一场会）。
+- 看某个神态：`http://127.0.0.1:8767/?pose=thinking`，可选 `off / starting / listening / thinking / waiting / speaking`，
+  再加 `&hearing`、`&working`、`&muted`。
+- 给桌面应用截图（不需要屏幕录制权限）：
+  `cd app && AVATAR_URL=http://127.0.0.1:8767 AVATAR_PAGE='/?pose=waiting' AVATAR_THEME=dark AVATAR_SHOT=/tmp/x.png npx electron .`
+- 3D 形象在 `character.js`：`build()` 搭模型，`POSES` 是每种状态的姿势，颜色从 CSS 变量 `--tone` 读。
+  形象是原创的，不要照着现成的游戏或影视角色做。
+- 浏览器预览面板不给麦克风、会拦内嵌的设计稿页面，这两样要在桌面应用里验证。
 
 ## 约定
 

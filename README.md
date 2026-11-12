@@ -8,26 +8,34 @@
 
 ## 启动
 
+它是一个桌面应用：打开就是它本人，没有别的。
+
 ```bash
-uv run python -m avatar.models   # 首次：下载本地语音模型（约 440MB，逐个文件校验）
-uv run python -m avatar          # 启动后台
+uv run python -m avatar.models      # 首次：下载本地语音模型（约 440MB，逐个文件校验）
+cd app && npm install && npm run pack   # 首次：打包出 app/dist/小克.app，拖到「应用程序」里
 ```
 
-然后用 Chrome 打开两个页面：
+之后双击「小克」就行。应用会自己把后台起起来，退出时一起关掉；后台已经在跑的话就直接接上。
 
-| 页面 | 地址 | 用途 |
-|---|---|---|
-| 控制台 | http://127.0.0.1:8765/ | 开始 / 结束会议、看字幕、改说话人名字、派任务、改设置 |
-| 形象页 | http://127.0.0.1:8765/stage | 数字人的脸、耳朵和嘴。收音和播放都在这个页面里 |
+| 窗口 | 里面有什么 |
+|---|---|
+| 主窗口 | 只有它本人。状态看颜色和动作：闭眼=没开会，青=在听，紫=托下巴在想，琥珀=举手想发言，橙红=在说；头顶有光球在转=后台在干活；话筒翻上去=已静音 |
+| 设置窗口 | 「记录」：对话、任务、打字发言、派任务；「设置」：会议背景、场景、名字、嗓音、麦克风和扬声器等 |
+
+主窗口底部的控制条：会前是「开始」和设置；开会后是静音、让它停下、结束会议、会议记录、设置，鼠标动一下才出现。
+同样的操作在菜单栏「会议」里也有，带快捷键。
+
+不想装应用也可以：`uv run python -m avatar` 之后用 Chrome 打开 http://127.0.0.1:8765/ ，是同一个界面。
 
 ## 当面开会
 
-1. 控制台：场景选「当面开会」，填好会议背景和项目目录，点「开始会议」。
-2. 形象页：点「接通麦克风和扬声器」，允许麦克风。可以把这个页面投到电视或投影上。
+1. 点设置，场景选「当面开会」，填好会议背景和项目目录。
+2. 点「开始」，第一次会问你要麦克风权限。会议开始和接通声音是同一步。
 3. 直接对它说话。叫它名字它一定回答；平时它自己判断该不该开口。
-4. 控制台顶部的说话人标签点一下可以改名，之后它就知道谁是谁。
+4. 在「记录」里点对话中的名字可以改名，之后它就知道谁是谁。
 
-笔记本自带麦克风大约 2 米内可用。会议室大的话接一个会议全向麦，在形象页右下角选设备。
+想给大家看就把主窗口投到电视或投影上。笔记本自带麦克风大约 2 米内可用；会议室大的话接一个会议全向麦，
+在设置里选麦克风。
 
 ## 线上会议
 
@@ -44,10 +52,9 @@ uv run python -m avatar          # 启动后台
    ```
 
 2. 会议软件的音频设置：扬声器选 **BlackHole 2ch**，麦克风选 **BlackHole 16ch**。
-3. 控制台：场景选「线上会议」。
-4. 形象页右下角：麦克风选 **BlackHole 2ch**（听会议里的人），扬声器选 **BlackHole 16ch**（把它的声音送进会议）。
-5. OBS：添加「窗口采集」选形象页的窗口，点「启动虚拟摄像头」；会议软件的摄像头选 **OBS Virtual Camera**。
-6. 建议把会议里的昵称写成「小克（AI）」这样，让其他人知道它不是真人。
+3. 设置里：场景选「线上会议」，麦克风选 **BlackHole 2ch**（听会议里的人），扬声器选 **BlackHole 16ch**（把它的声音送进会议）。
+4. OBS：添加「窗口采集」选小克的主窗口，点「启动虚拟摄像头」；会议软件的摄像头选 **OBS Virtual Camera**。
+5. 建议把会议里的昵称写成「小克（AI）」这样，让其他人知道它不是真人。
 
 ## 它能做什么
 
@@ -58,7 +65,7 @@ uv run python -m avatar          # 启动后台
 | 它说话时你插话 | 约 0.7 秒内停下，顺着你的话接 |
 | 「查一下飞书有没有这个接口」 | 说「我查一下」，后台联网查，查完口头汇报 |
 | 「登录逻辑在哪个文件」 | 后台只读方式查你登记的项目目录 |
-| 「出一版登录页」 | 后台调用本机 Claude 写一个网页设计稿，显示在形象页上 |
+| 「出一版登录页」 | 后台调用本机 Claude 写一个网页设计稿，显示在主窗口的资料板上 |
 | 冷场 6 秒 | 主动推进或小结一次 |
 
 ## 接口
@@ -78,9 +85,24 @@ uv run python -m avatar          # 启动后台
 | POST | `/api/board` `{task_id}` | 选择资料板显示哪个任务，`null` 为收起 |
 | PATCH | `/api/settings` | 改名字、嗓音、语速、场景、项目目录、会议背景等 |
 | WS | `/ws/events` | 状态事件流，连接后先收到全量快照 |
-| WS | `/ws/audio` | 形象页的音频通道 |
+| WS | `/ws/audio` | 主窗口的音频通道（同一时间只有一个窗口负责收音和播放） |
 
-形象页加 `?autostart=1` 可以在已授权麦克风的浏览器里免点击接通。
+界面上的每个按钮和表单项都有固定的 `id`，改版不改名（`tests/test_pages.py` 里有清单并会检查）。它们和接口的对应关系：
+
+| 界面元素 | 接口 |
+|---|---|
+| `#btn-start` 开始 | `POST /api/meeting/start`，同时在这个窗口接通声音 |
+| `#btn-stop` 结束会议 | `POST /api/meeting/stop` |
+| `#btn-mute` 静音 | `POST /api/mute` |
+| `#btn-hush` 让它停下 | `POST /api/hush` |
+| `#btn-board-close` 收起资料板、「记录」里的 `.task[data-task-id]` | `POST /api/board` |
+| `#composer`（`#say-kind` 选「说话」） | `POST /api/utterance` |
+| `#composer`（`#say-kind` 选任务类型） | `POST /api/tasks` |
+| 对话里的 `button.who[data-speaker-id]` | `PATCH /api/speakers/{id}` |
+| `#settings` 里带 `name` 的每一项 | `PATCH /api/settings` |
+
+主窗口的网址参数：`?autostart=1` 会议一开始就免点击接通声音（桌面应用默认带）；
+`?pose=thinking&hearing&working&muted` 强行指定神态，看效果和截图用。
 
 ## 代码结构
 
@@ -93,11 +115,18 @@ uv run python -m avatar          # 启动后台
 | `avatar/mouth.py` | 语音合成：本地优先，在线和系统语音兜底 |
 | `avatar/meeting.py`、`speakers.py`、`config.py` | 会议状态、说话人、设置 |
 | `avatar/api.py` | REST 和 WebSocket |
-| `avatar/web/` | 形象页和控制台（原生 HTML/JS，无构建） |
+| `avatar/web/stage.*` | 主窗口：形象、资料板、字幕、提示、控制条 |
+| `avatar/web/panel.*` | 设置窗口：记录和设置 |
+| `avatar/web/character.js` | 3D 形象，全部用代码建模（three.js，放在 `vendor/` 里，不联网）；`avatar.js` 是不支持 3D 时的 2D 备用形象 |
+| `avatar/web/api.js`、`audio.js` | 接口与状态、收音与播放（两个窗口共用） |
+| `avatar/demo.py` | 演示后台：不需要模型、网络和 Claude，数据放临时目录 |
+| `app/` | 桌面外壳（Electron）：起后台、开窗口、菜单；`pack.js` 打包，`setup.js` 安装 Electron |
 
 ## 测试
 
 ```bash
+uv run python -m avatar.demo       # 演示后台（8767 端口），改界面时用；加 --autoplay 自动演一场会
+cd app && npm run demo             # 桌面应用接到演示后台
 uv run pytest                      # 单元测试，不需要模型和网络
 uv run pytest -m live -s           # 真实模型和本机 Claude
 uv run python -m tests.e2e_voice   # 语音端到端：两位模拟与会者说话、提问、插话
