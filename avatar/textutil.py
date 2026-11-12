@@ -215,3 +215,55 @@ def fix_name(text: str, name: str) -> str:
             i += 1
     return "".join(out)
 
+
+
+# ================= 听写清洗 =================
+# 两层：strip_noise 在识别完马上用，只挡「根本不是人话」的；tidy 在写会议记录时用，去语气词和口吃。
+# 接话逻辑拿到的是 strip_noise 之后的原话（它要靠「嗯」「对」判断对方在听），记录里才是 tidy 之后的。
+
+_P = "，。！？、；：,.!?;:"
+_FOREIGN = re.compile(r"[぀-ヿᄀ-ᇿ가-힯]+")   # 假名、韩文：识别锁了中文，出现就是杂音被认错
+_FILLER = re.compile(r"[嗯呃]+|(?<![A-Za-z])(?:u+h*m+|u+h+|e+m{2,}|h+m{2,})(?![A-Za-z])", re.I)
+_INTERJ = re.compile(rf"(?<![^{_P}\s])[啊哦噢喔诶欸哎唉]+(?=[{_P}\s]|$)")   # 单独成一小句的才算拖音，「对啊」的啊不算
+_RUN = re.compile(r"([一-鿿])\1{2,}")                       # 同一个字连说三次以上
+_STUTTER = set("我你他她它这那就是不对好有没在了也都还把给和跟让被要会能可行")
+_PAIR = re.compile(r"(?<!其)([我你他她它这那])\1")           # 这几个字连着两个一定是口吃（「其他他们」除外）
+_UNIT = re.compile(r"([一-鿿]{2,4}?)\1+")                   # 「就是就是」「他就他就」
+_COUNTING = set("一二两三四五六七八九十几每半")               # 「一个一个」「两个两个」是在数数，不是口吃
+_CLAUSE = re.compile(                                       # 「他就，他就回了」「对，对，对。」「我，我觉得」
+    rf"(?<![^{_P}\s])(?:([一-鿿]{{2,4}})[，、,]\s*(?=\1)"
+    rf"|([一-鿿])[，、,]\s*(?=\2(?:[{_P}\s]|$))"
+    rf"|([我你他她它这那])[，、,]\s*(?=\3))")
+
+
+def strip_noise(text: str, event: str = "") -> str:
+    """识别结果里不是人话的部分去掉；整段都不是就返回空。event 是识别模型判断的声音类型（人声、喘气、音乐……）。"""
+    text = _FOREIGN.sub("", text).strip()
+    core = _norm(text)
+    if not core:
+        return ""
+    if event and "Speech" not in event and len(core) <= 4:     # 模型自己都说不是人声，字又没几个
+        return ""
+    return text
+
+
+def _fix_punct(text: str) -> str:
+    text = re.sub(rf"[，、,；;：:]\s*(?=[{_P}])", "", text)       # 删字之后挨在一起的标点只留后一个
+    text = re.sub(r"(?<=[。！？!?])\s*[，、,。]+", "", text)
+    return re.sub(rf"^[\s{_P}]+", "", text).strip()
+
+
+def _fold_unit(m: re.Match) -> str:
+    unit = m.group(1)
+    return m.group(0) if unit[0] in _COUNTING or len(set(unit)) == 1 else unit
+
+
+def tidy(text: str) -> str:
+    """把一句口语整理成能读的记录：去掉语气词、拖音和口吃式的重复，别的一个字不动。只剩语气词的句子返回空。"""
+    text = _fix_punct(_INTERJ.sub("", _FILLER.sub("", text)))
+    text = _RUN.sub(lambda m: m.group(1) * (1 if m.group(1) in _STUTTER else 2), text)
+    text = _UNIT.sub(_fold_unit, _PAIR.sub(r"\1", text))
+    while (folded := _CLAUSE.sub("", text)) != text:
+        text = folded
+    text = _fix_punct(text)
+    return text if _has_words(text) else ""

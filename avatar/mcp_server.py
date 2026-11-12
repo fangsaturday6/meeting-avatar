@@ -13,7 +13,7 @@ from pathlib import Path
 if __package__ in (None, ""):          # 被客户端当脚本直接运行时，把项目根目录加进来
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from avatar.archive import Archive, dialogue_of, minutes_of  # noqa: E402
+from avatar.archive import Archive, dialogue_of, minutes_of, polished_of  # noqa: E402
 
 NAME = "meetings"
 INSTRUCTIONS = (
@@ -31,11 +31,13 @@ TOOLS = [
     },
     {
         "name": "read_meeting",
-        "description": "读一场会议。默认读最近一场的全部内容（纪要 + 逐句对话 + 后台任务结果）。正在开的会也能读。",
+        "description": "读一场会议。默认读最近一场的全部内容（纪要 + 整理稿 + 逐句对话 + 后台任务结果）。正在开的会也能读。",
         "inputSchema": {"type": "object", "properties": {
             "id": {"type": "string", "description": "会议编号（list_meetings 给出的 id）；不填或填 latest 是最近一场"},
-            "part": {"type": "string", "enum": ["all", "minutes", "dialogue"],
-                     "description": "all = 全部（默认）；minutes = 只要纪要；dialogue = 只要逐句对话"},
+            "part": {"type": "string", "enum": ["all", "minutes", "polished", "dialogue"],
+                     "description": "all = 全部（默认）；minutes = 只要纪要；"
+                                    "polished = 只要整理稿（会后改过错字、去掉口头禅的对话，最好读；还没有时给逐句对话）；"
+                                    "dialogue = 只要逐句对话（识别的原话，核对原话时用）"},
             "offset": {"type": "integer", "minimum": 0,
                        "description": "从第几个字开始读，默认 0。长会一次读不完时，结尾会告诉你下一次的 offset"}}},
     },
@@ -88,7 +90,9 @@ def read_meeting(archive: Archive, id: str = "latest", part: str = "all", offset
         raise ValueError("没有这场会议的记录。先用 list_meetings 看有哪些。")
     if part == "minutes":
         return minutes_of(text) or "这场会还没有纪要。可以读 dialogue 自己归纳。"
-    if part == "dialogue":
+    if part == "polished" and polished_of(text):
+        return _page(polished_of(text), offset)
+    if part in ("dialogue", "polished"):
         return _page(dialogue_of(text), offset) or "这场会没有对话内容。"
     return _page(text, offset)
 

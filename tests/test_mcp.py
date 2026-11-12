@@ -53,6 +53,12 @@ def test_list_read_and_search(tmp_path):
     dialogue = call(a, "read_meeting", id="2026-11-10_100000", part="dialogue")[0]
     assert dialogue.startswith("[10:00:05] 张三") and "纪要" not in dialogue
     assert "还没有纪要" in call(a, "read_meeting", part="minutes")[0]
+    # 整理稿：有就给整理稿，还没有就给逐句对话
+    assert call(a, "read_meeting", id="2026-11-10_100000", part="polished")[0] == dialogue
+    a.set_minutes("2026-11-10_100000", "登录排期", "### 结论\n- 先做登录", "[10:00:05] 张三：先做登录。")
+    assert call(a, "read_meeting", id="2026-11-10_100000", part="polished")[0] == "[10:00:05] 张三：先做登录。"
+    assert call(a, "read_meeting", id="2026-11-10_100000", part="minutes")[0] == "### 结论\n- 先做登录"
+    assert call(a, "read_meeting", id="2026-11-10_100000", part="dialogue")[0] == dialogue
     assert call(a, "read_meeting", id="../../etc/passwd") == ("没有这场会议的记录。先用 list_meetings 看有哪些。", True)
 
     text, bad = call(a, "search_meetings", query="供应商 接口")

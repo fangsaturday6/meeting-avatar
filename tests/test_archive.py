@@ -1,5 +1,6 @@
 import asyncio
 
+from avatar import archive
 from avatar.archive import Archive
 from avatar.config import Settings
 from avatar.meeting import Meeting
@@ -147,6 +148,7 @@ def test_minutes_go_before_the_dialogue_and_can_be_replaced(tmp_path):
     assert not a.set_minutes("2020-01-01_000000", "x", "y")
     assert split_minutes("  \n# 「登录排期」\n\n### 结论\n- x\n") == ("登录排期", "### 结论\n- x")
     assert split_minutes("无实质内容。") == ("无实质内容", "")
+    assert split_minutes("会议标题：登录排期\n\n### 结论\n- x") == ("登录排期", "### 结论\n- x")
 
 
 def test_minutes_cannot_break_the_file_structure(tmp_path):
@@ -170,3 +172,97 @@ def test_minutes_without_a_title_line_keep_their_first_section():
     assert title == "" and body.startswith("### 待办\n- 小克") and "### 没定的事" in body
     assert split_minutes("- 先做登录\n- 李四出文档") == ("", "- 先做登录\n- 李四出文档")
     assert split_minutes("# 登录排期\n\n### 结论\n- x") == ("登录排期", "### 结论\n- x")
+
+
+# ---- 记录是整理过的：一个人连着说的并成一段，语气词和口吃不进记录 ----
+def said(m: Meeting, who: str, text: str, at: float, seconds: float = 1.0):
+    """at 是这句话说完的时刻（相对开会多少秒），seconds 是这句话说了多久。"""
+    line = m.add_line("human", text, m.speakers.by_name(who), seconds=seconds)
+    line.t = m.started_at + at
+    return line
+
+
+def dialogue(tmp_path, m: Meeting) -> list[str]:
+    m.save()
+    body = saved(tmp_path, m).partition("\n## 对话\n")[2].partition("\n## 后台任务\n")[0]
+    return [l.partition("] ")[2] for l in body.splitlines() if l.strip()]
+
+
+def test_one_person_talking_on_becomes_one_paragraph(tmp_path):
+    m = start(tmp_path)
+    said(m, "张三", "我们现在是两个模式。", at=2.0, seconds=2.0)
+    said(m, "张三", "一个是问答。", at=3.8, seconds=1.1)       # 只停了 0.7 秒：是一句话被切开了
+    said(m, "张三", "一个是干活。", at=5.7, seconds=1.2)
+    said(m, "张三", "之前没选干活，所以它只回答。", at=10.0, seconds=2.6)   # 停了 1.7 秒：另一句，但还是这一段
+    assert dialogue(tmp_path, m) == ["张三：我们现在是两个模式，一个是问答，一个是干活。之前没选干活，所以它只回答。"]
+
+
+def test_a_long_pause_or_another_speaker_starts_a_new_paragraph(tmp_path):
+    m = start(tmp_path)
+    said(m, "张三", "先做登录。", at=2.0)
+    said(m, "张三", "再做支付。", at=9.0)            # 停了 6 秒
+    said(m, "李四", "人手够吗？", at=10.5)
+    said(m, "张三", "够。", at=12.0)
+    assert dialogue(tmp_path, m) == ["张三：先做登录。", "张三：再做支付。", "李四：人手够吗？", "张三：够。"]
+
+
+def test_fillers_and_stutters_stay_out_of_the_record(tmp_path):
+    m = start(tmp_path)
+    said(m, "张三", "呃，那那那个就是就是他他就回问题了。", at=3.0, seconds=2.5)
+    said(m, "李四", "嗯。", at=4.0, seconds=0.4)        # 只是附和了一声：不进记录，也不把张三的话切成两段
+    said(m, "张三", "他就。", at=5.2, seconds=0.6)
+    said(m, "张三", "他就没干活。", at=6.9, seconds=1.2)
+    m.add_line("bot", "嗯，我看了一下，是模式没选对。")       # 数字人自己说的话原样留着
+    text = dialogue(tmp_path, m)
+    assert text == ["张三：那个就是他就回问题了。他就没干活。", "小克：嗯，我看了一下，是模式没选对。"]
+    assert "lines: 4\n" in saved(tmp_path, m)             # 句数只算进了记录的
+
+
+def test_a_meeting_of_nothing_but_noise_has_an_empty_dialogue(tmp_path):
+    m = start(tmp_path)
+    said(m, "张三", "嗯。", at=1.0)
+    said(m, "张三", "啊。", at=5.0)
+    assert dialogue(tmp_path, m) == []
+    assert "lines: 0\n" in saved(tmp_path, m)
+
+
+def test_paragraphs_do_not_grow_forever(tmp_path):
+    m = start(tmp_path)
+    for i in range(30):
+        said(m, "张三", f"第{i}点是这个接口要先定下来。", at=2.0 * (i + 1), seconds=1.8)
+    paras = dialogue(tmp_path, m)
+    assert len(paras) > 1 and all(len(p) < 260 for p in paras)
+
+
+# ---- 整理稿：会后由 Claude 书面化的对话，放在纪要和逐句对话之间 ----
+def test_polished_transcript_sits_between_minutes_and_dialogue_and_survives_resaves(tmp_path):
+    m = start(tmp_path)
+    sid = m.speakers.assign(None, 10.0)
+    line = m.add_line("human", "那个就是先做登录对吧", sid)
+    stamp = saved(tmp_path, m).partition("\n## 对话\n")[2].strip().split("]")[0] + "]"
+    m.set_status("off")
+    m.set_minutes("登录排期", "### 结论\n- 先做登录", f"{stamp} 说话人1：先做登录。")
+    text = saved(tmp_path, m)
+    assert text.index("## 纪要") < text.index("## 整理稿") < text.index("## 对话")
+    assert archive.polished_of(text) == f"{stamp} 说话人1：先做登录。"
+    assert "那个就是先做登录对吧" in archive.dialogue_of(text)         # 逐句原话还在，可以对照
+    assert "整理稿" not in archive.minutes_of(text)
+
+    m.rename_speaker(sid, "张三")                                      # 会后改名：整理稿里的名字跟着改
+    text = saved(tmp_path, m)
+    assert archive.polished_of(text) == f"{stamp} 张三：先做登录。" and "说话人1" not in text
+
+    m.set_minutes("登录排期", "### 结论\n- 先做登录")                    # 重新整理纪要但这次没有整理稿：旧的不留
+    assert "## 整理稿" not in saved(tmp_path, m)
+
+
+def test_polished_transcript_can_be_added_to_an_old_record(tmp_path):
+    m = start(tmp_path)
+    m.add_line("human", "先做登录", m.speakers.by_name("张三"))
+    m.set_status("off")
+    a = Archive(tmp_path)
+    assert a.set_minutes(m.record_id, "登录排期", "- 先做登录", "[10:00:00] 张三：先做登录。")
+    text = a.read(m.record_id)
+    assert archive.polished_of(text) == "[10:00:00] 张三：先做登录。" and archive.minutes_of(text) == "- 先做登录"
+    assert a.set_minutes(m.record_id, "登录排期", "- 先做登录")          # 再整理一次、这次没有整理稿
+    assert "## 整理稿" not in a.read(m.record_id) and archive.minutes_of(a.read(m.record_id)) == "- 先做登录"

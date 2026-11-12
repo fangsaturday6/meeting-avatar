@@ -104,6 +104,7 @@ class Hub:
         self.player.floor = self.floor
         self.meeting.on_settings = self._settings_changed
         self.minuting: dict[str, asyncio.Task] = {}     # 正在整理纪要的会议
+        self.polishing: dict[str, asyncio.Task] = {}    # 纪要已经有了、整理稿还在写的会议
         self._bg: set[asyncio.Task] = set()
         self._projects: list[knowledge.Project] = []    # 它认识的项目（扫盘要一两秒，只在后台线程里刷新）
         self.ears = Ears(self.floor.on_speech_start, self.floor.on_speech_end, self.floor.on_utterance)
@@ -209,18 +210,29 @@ class Hub:
         self.meeting.emit("minutes", id=meeting_id, state="running")
         return True
 
+    def _store_minutes(self, meeting_id: str, title: str, summary: str, polished: str = "") -> None:
+        m = self.meeting
+        if m.record_id == meeting_id and not m.active:
+            m.set_minutes(title, summary, polished)     # 刚结束的这一场：之后再改名、重存也不会丢
+        else:
+            self.archive.set_minutes(meeting_id, title, summary, polished)
+
     async def _minutes(self, meeting_id: str, dialogue: str) -> None:
+        """纪要和整理稿（书面化的对话）同时开工。纪要快，写完就算整理好了；整理稿慢，好了再补进同一份记录。"""
         state = "failed"
+        if stale := self.polishing.pop(meeting_id, None):
+            stale.cancel()          # 重新整理：上一次还没写完的整理稿不要了
+        polish = getattr(self.worker, "polish", None)
+        draft = asyncio.create_task(polish(dialogue)) if polish else None
         try:
             res = await self.worker.summarize(dialogue)
             if res.ok:
                 title, summary = split_minutes(res.text)
                 state = "done" if summary else "empty"
-                m = self.meeting
-                if m.record_id == meeting_id and not m.active:
-                    m.set_minutes(title, summary)      # 刚结束的这一场：之后再改名、重存也不会丢
-                else:
-                    self.archive.set_minutes(meeting_id, title, summary)
+                self._store_minutes(meeting_id, title, summary)
+                if draft and summary:      # 没有纪要（整场都是杂音）就不要整理稿了
+                    self.polishing[meeting_id] = asyncio.create_task(self._polished(meeting_id, title, summary, draft))
+                    draft = None
             else:
                 log.warning("纪要没整理成：%s", res.text[:100])
         except asyncio.CancelledError:
@@ -228,10 +240,27 @@ class Hub:
         except Exception:  # noqa: BLE001
             log.exception("整理纪要出错")
         finally:
+            if draft:
+                draft.cancel()
             if self.minuting.get(meeting_id) is asyncio.current_task():
                 del self.minuting[meeting_id]       # 只摘自己的登记：别把紧接着发起的下一次整理摘掉
             self.meeting.emit("minutes", id=meeting_id, state=state)
             self.meeting.emit("meetings", meetings=self.archive.recent())
+
+    async def _polished(self, meeting_id: str, title: str, summary: str, draft: asyncio.Task) -> None:
+        """等整理稿写完，补进会议记录。没写成就算了：记录里还有逐句的对话。"""
+        try:
+            if polished := await draft:
+                self._store_minutes(meeting_id, title, summary, polished)
+                self.meeting.emit("meetings", meetings=self.archive.recent())    # 开着这场会的阅读页会重新读一遍
+        except asyncio.CancelledError:
+            draft.cancel()
+            raise
+        except Exception:  # noqa: BLE001
+            log.exception("整理稿没写成")
+        finally:
+            if self.polishing.get(meeting_id) is asyncio.current_task():
+                del self.polishing[meeting_id]
 
     async def load(self) -> None:
         """加载本地模型。缺模型不报错，只是少一项能力。"""
@@ -275,7 +304,7 @@ class Hub:
                 "task_kinds": list(TASK_KINDS)}
 
     async def close(self) -> None:
-        for t in [*self.minuting.values(), *self._bg]:
+        for t in [*self.minuting.values(), *self.polishing.values(), *self._bg]:
             t.cancel()
         await self.floor.stop()
         self.meeting.save()

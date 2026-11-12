@@ -145,3 +145,61 @@ def test_speaker_prefix_copied_from_the_transcript_is_not_spoken():
     assert clean_for_speech("[小克] 在，你说。") == "在，你说。"
     assert clean_for_speech("[说话人1] 好。") == "好。"
     assert clean_for_speech("用 [0, 1] 这个区间。") == "用 [0, 1] 这个区间。"
+
+
+# ---- 听写：杂音被认成的字、口语里的语气词和重复 ----
+import pytest
+
+from avatar.textutil import strip_noise, tidy
+
+
+@pytest.mark.parametrize("text, event, kept", [
+    ("ち。", "<|Speech|>", ""),                       # 咳嗽、键盘声被认成假名
+    ("어.", "<|Speech|>", ""),
+    ("那同ぼさでの表", "<|Speech|>", "那同表"),        # 夹在中文里的假名去掉，中文留着
+    ("嗯。", "<|Breath|>", ""),                       # 模型自己说这不是人声，字又很少
+    ("。", "<|Speech|>", ""),
+    ("嗯。", "<|Speech|>", "嗯。"),                   # 真的附和要留给接话逻辑（它靠这个知道对方在听）
+    ("大家先看一下这个方案", "<|BGM|>", "大家先看一下这个方案"),   # 有背景音乐但话是完整的
+    ("Hello, can you hear me?", "<|Speech|>", "Hello, can you hear me?"),
+    ("好的。", "", "好的。"),
+])
+def test_strip_noise_drops_what_is_not_speech(text, event, kept):
+    assert strip_noise(text, event) == kept
+
+
+@pytest.mark.parametrize("raw, clean", [
+    ("嗯。", ""),                                               # 整句只有语气词：这句不进记录
+    ("啊。", ""),
+    ("嗯嗯，呃。", ""),
+    ("呃，管理后台这块先放一放。", "管理后台这块先放一放。"),
+    ("然后呢呃，我们再看一下。", "然后呢，我们再看一下。"),
+    ("哎，肯定也是标签。", "肯定也是标签。"),
+    ("对啊，是这样。", "对啊，是这样。"),                         # 句尾的「啊」是语气，不是拖音
+    ("那那那个就是就是他他就回问题了。", "那个就是他就回问题了。"),
+    ("对对对，不这这不就是我自己的本地那张表。", "对，不这不就是我自己的本地那张表。"),
+    ("还是还是问问，现在是两个模式。", "还是问问，现在是两个模式。"),
+    ("他就，他就他他就回问题了。", "他就回问题了。"),
+    ("就是，就是这个是吧？", "就是这个是吧？"),
+    ("对，对，对，就是这个。", "对，就是这个。"),
+    ("我我觉得可以。", "我觉得可以。"),
+    ("谢谢谢谢。", "谢谢。"),                                    # 叠词留两个
+    ("哈哈哈哈哈。", "哈哈。"),
+    ("我们一个一个看。", "我们一个一个看。"),                     # 「一个一个」不是口吃
+    ("其他他们没说。", "其他他们没说。"),
+    ("这个成就就是这么来的。", "这个成就就是这么来的。"),
+    ("先做登录，下周三之前把接口文档发出来。", "先做登录，下周三之前把接口文档发出来。"),
+    ("hello hello,能听到吗？", "hello hello,能听到吗？"),
+    ("Yeah.", "Yeah."),
+    ("um, 我看一下 1000 块", "我看一下 1000 块"),
+    ("好的。", "好的。"),
+    ("对。", "对。"),
+])
+def test_tidy_removes_fillers_and_stutters_only(raw, clean):
+    assert tidy(raw) == clean
+
+
+def test_tidy_is_stable():
+    once = tidy("那那那个，就是就是，他他就回问题了，嗯，然后呢，呃，我们再看一下。")
+    assert once == "那个，就是，他就回问题了，然后呢，我们再看一下。"
+    assert tidy(once) == once

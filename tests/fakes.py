@@ -85,6 +85,12 @@ class FakeWorker:
         self.ran: list[tuple[str, str]] = []
         self.minutes = minutes
         self.summarized: list[str] = []
+        self.polished = ""            # polish 交回的整理稿；空 = 没整理成
+        self.polish_delay = 0.0
+
+    async def polish(self, transcript):
+        await asyncio.sleep(self.polish_delay)
+        return self.polished
 
     async def summarize(self, transcript):
         self.summarized.append(transcript)

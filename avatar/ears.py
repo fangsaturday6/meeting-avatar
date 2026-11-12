@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Awaitable, Callable
 
 import numpy as np
 
 from . import models
+from .textutil import strip_noise
 
 log = logging.getLogger("avatar.ears")
 SAMPLE_RATE = 16000
@@ -51,7 +51,7 @@ class Ears:
         import sherpa_onnx as so
 
         cfg = so.VadModelConfig()
-        cfg.silero_vad.model = str(models.VAD.path)
+        cfg.silero_vad.model = str((models.VAD if models.VAD.ready else models.VAD_OLD).path)
         cfg.silero_vad.threshold = 0.5
         cfg.silero_vad.min_silence_duration = self.min_silence
         cfg.silero_vad.min_speech_duration = 0.25
@@ -61,7 +61,9 @@ class Ears:
         self._vad = so.VoiceActivityDetector(cfg, buffer_size_in_seconds=60)
         self._asr = so.OfflineRecognizer.from_sense_voice(
             model=str(models.ASR.path), tokens=str(models.ASR_TOKENS.path),
-            num_threads=4, use_itn=True, language="auto",
+            # 语言锁中文：让它自己猜的话，咳嗽、键盘声会被猜成日语、韩语、英语，记录里就多出「ち」「Yeah.」。
+            # 锁了之后整句英文照样认得出来。
+            num_threads=4, use_itn=True, language="zh",
         )
         if models.SPEAKER.ready:
             self._spk = so.SpeakerEmbeddingExtractor(
@@ -130,8 +132,8 @@ class Ears:
         st = self._asr.create_stream()
         st.accept_waveform(SAMPLE_RATE, samples)
         self._asr.decode_stream(st)
-        text = st.result.text.strip()
-        if not re.search(r"[\w一-鿿]", text):
+        text = strip_noise(st.result.text, getattr(st.result, "event", ""))
+        if not text:
             return "", None, seconds
         emb = None
         if self._spk is not None and len(samples) >= SAMPLE_RATE * self.min_embed_seconds:

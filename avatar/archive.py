@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import DESIGN_DIR, WORKSPACE
+from .textutil import tidy
 
 if TYPE_CHECKING:
     from .meeting import Meeting
@@ -54,6 +55,41 @@ def _task_block(t) -> list[str]:
 
 NO_CONTENT = "无实质内容"
 
+SAME_PARAGRAPH = 2.0    # 同一个人停顿不超过这么久又接着说：记成一段
+SAME_SENTENCE = 1.0     # 停顿比这还短：是断句把一句话切开了，中间的句号换成逗号
+PARAGRAPH = 160         # 一段攒到这么多字就另起一段
+
+
+def _join(a: str, b: str, pause: float) -> str:
+    if a.endswith("。") and pause < SAME_SENTENCE:
+        a = a[:-1] + "，"
+    elif a[-1:].isalnum():      # 前一句没带标点（打字的、被截断的）
+        a += " " if a[-1:].isascii() and b[:1].isascii() else "，"
+    return a + b
+
+
+def paragraphs(lines) -> list[tuple]:
+    """逐句的识别结果 → 能读的记录，每项是（这一段的第一句，整理后的文字）。
+
+    人说的话去掉语气词和口吃（只剩语气词的整句不要），同一个人连着说的并成一段。
+    数字人说的话和旁注原样保留。内存里的逐句原话不动，接话逻辑和界面上的实时字幕用的还是原话。
+    """
+    out: list[list] = []     # [第一句, 文字, 最后一句]
+    for l in lines:
+        text = _one_line(l.text)
+        if l.who != "human":
+            out.append([l, text, l])
+            continue
+        if not tidy(text):
+            continue
+        prev = out[-1] if out else None
+        if (prev and prev[2].who == "human" and prev[2].speaker_id == l.speaker_id and len(prev[1]) < PARAGRAPH
+                and (pause := l.t - l.seconds - prev[2].t) <= SAME_PARAGRAPH):
+            prev[1], prev[2] = _join(prev[1], text, pause), l
+        else:
+            out.append([l, text, l])
+    return [(first, tidy(text) if first.who == "human" else text) for first, text, _ in out]
+
 
 def split_minutes(raw: str) -> tuple[str, str]:
     """把整理纪要的人交回来的文字拆成（标题，正文）。第一行是标题。"""
@@ -65,15 +101,18 @@ def split_minutes(raw: str) -> tuple[str, str]:
     if re.match(r"\s*(#{2,}|[-*•]\s)", lines[0]):
         # 没写标题，上来就是「### 待办」或一条要点：整段都是正文，别把小节名当成会议标题
         return "", "\n".join(lines).strip()
-    title = _one_line(lines[0]).strip("#*「」《》\"' ").removeprefix("标题：").removeprefix("标题:").strip()
+    title = re.sub(r"^(会议)?标题\s*[：:]\s*", "", _one_line(lines[0]).strip("#*「」《》\"' ")).strip("「」《》\"' ")
     body = "\n".join(lines[1:]).strip()
     if title.startswith(NO_CONTENT) or not body:
         return NO_CONTENT, ""       # 只有一行、没有正文：不管它怎么措辞，都是「没有可整理的内容」
     return title[:30], body
 
 
-def with_minutes(text: str, title: str, summary: str) -> str:
-    """在一份会议记录里写入（或替换）标题和纪要。纪要放在对话前面，打开文件先看到的就是它。"""
+def with_minutes(text: str, title: str, summary: str, polished: str = "") -> str:
+    """在一份会议记录里写入（或替换）标题、纪要和整理稿。它们放在逐句对话前面，打开文件先看到的就是它们。
+
+    整理稿是会后把对话书面化的版本（改错字、去口头禅），格式和「对话」一样；没有就不写这一节。
+    """
     head, sep, rest = text.partition("\n---\n")
     if not sep or not head.startswith("---"):
         return text
@@ -83,16 +122,23 @@ def with_minutes(text: str, title: str, summary: str) -> str:
     before, mark, after = rest.partition("\n## 对话\n")
     if not mark:
         return text
-    before = before.split("\n## 纪要\n")[0].rstrip("\n")
+    before = before.split("\n## 纪要\n")[0].split("\n## 整理稿\n")[0].rstrip("\n")
     # 纪要里的大标题一律降成三级：文件靠「## 对话」这样的二级标题分节，纪要里不能出现
     summary = re.sub(r"(?m)^#{1,2}\s+", "### ", summary.strip())
     block = f"\n\n## 纪要\n\n{summary}\n" if summary else "\n"
+    if polished.strip():
+        block = block.rstrip("\n") + f"\n\n## 整理稿\n\n{polished.strip()}\n"
     return "---\n" + "\n".join(keep) + sep + before + block + mark + after
 
 
 def minutes_of(text: str) -> str:
     """一份会议记录里的纪要正文；没有就是空。只认「对话」之前的那一节（后面任务结果里引用的不算）。"""
-    return text.partition("\n## 对话\n")[0].partition("\n## 纪要\n")[2].strip()
+    return text.partition("\n## 对话\n")[0].partition("\n## 纪要\n")[2].partition("\n## 整理稿\n")[0].strip()
+
+
+def polished_of(text: str) -> str:
+    """一份会议记录里的整理稿（书面化之后的对话）；没有就是空。"""
+    return text.partition("\n## 对话\n")[0].partition("\n## 整理稿\n")[2].strip()
 
 
 def dialogue_of(text: str) -> str:
@@ -103,7 +149,7 @@ def dialogue_of(text: str) -> str:
 def render(m: "Meeting") -> str:
     """一场会的全部内容：元数据、纪要、逐句对话（带时刻和说话人）、后台任务及结果。"""
     text = _render(m)
-    return with_minutes(text, m.title, m.summary) if m.title or m.summary else text
+    return with_minutes(text, m.title, m.summary, m.polished) if m.title or m.summary else text
 
 
 def _render(m: "Meeting") -> str:
@@ -115,13 +161,13 @@ def _render(m: "Meeting") -> str:
         "bot": m.settings.name,
         "owner": _one_line(m.settings.owner),
         "speakers": "、".join(s["name"] for s in m.speakers.snapshot()),
-        "lines": sum(l.who != "note" for l in m.lines),
+        "lines": sum(l.who != "note" and (l.who != "human" or bool(tidy(l.text))) for l in m.lines),
         "topic": _one_line(m.settings.topic),
     }
     out = ["---", *(f"{k}: {v}" for k, v in head.items()), "---", "",
            f"# 会议记录 {head['started'][:16]}", "", "## 对话", ""]
-    for l in m.lines:
-        out += [f"[{_clock(l.t)}] {l.speaker or '旁注'}：{_one_line(l.text)}{'（被打断）' if l.cut else ''}", ""]
+    for l, text in paragraphs(m.lines):
+        out += [f"[{_clock(l.t)}] {l.speaker or '旁注'}：{text}{'（被打断）' if l.cut else ''}", ""]
     if m.tasks:
         out += ["## 后台任务", ""]
         for t in m.tasks:
@@ -188,14 +234,14 @@ class Archive:
         paths = sorted(self.root.glob("*.md"), key=lambda p: p.stem, reverse=True)
         return [_meta(p) for p in paths[:limit]]
 
-    def set_minutes(self, meeting_id: str, title: str, summary: str) -> bool:
-        """把纪要写进已经存盘的会议记录。"""
+    def set_minutes(self, meeting_id: str, title: str, summary: str, polished: str = "") -> bool:
+        """把纪要（和整理稿）写进已经存盘的会议记录。"""
         text = self.read(meeting_id)
         if text is None:
             return False
         path = self._path(meeting_id)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(with_minutes(text, title, summary), encoding="utf-8")
+        tmp.write_text(with_minutes(text, title, summary, polished), encoding="utf-8")
         os.replace(tmp, path)
         return True
 

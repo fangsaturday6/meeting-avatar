@@ -25,7 +25,8 @@
 
 每场会的完整对话在 `workspace/meetings/`，一场一个 Markdown 文件，文件名是开始时间
 （如 `2026-11-12_000458.md`），按文件名排序的最后一个就是最近一场。要看或分析会议，直接读这些文件。
-散会后整理出的纪要在文件里的「## 纪要」一节（结论、待办、没定的事），逐句对话在「## 对话」一节。
+散会后整理出的纪要在文件里的「## 纪要」一节（结论、待办、没定的事）；「## 整理稿」是会后书面化的对话
+（改过错字、去了口头禅，最好读，不一定每场都有）；「## 对话」是逐句的识别结果（已去掉语气词和口吃、并成段），核对原话看这一节。
 已登记 MCP 工具 `meetings`（`list_meetings` / `read_meeting` / `search_meetings`）时优先用它。
 这个目录不进 git，Grep / Glob 默认搜不到，先 `ls workspace/meetings/` 再按路径读。
 文件由 `avatar/archive.py` 写；后台在跑时也可以走 `GET /api/meetings`、`GET /api/meetings/latest`。
@@ -50,6 +51,10 @@
 - 8765 端口可能正跑着真实的会，不要停它、不要往里写数据。看界面另起一个后台，
   并用 `AVATAR_WORKSPACE` 指到临时目录，免得改掉真实设置。`.claude/launch.json` 里的 `avatar-dev`
   就是这样一个后台（8766 端口，数据在 `~/.cache/avatar-dev`）。
+- 听写分三层，各管各的，别混：`ears.py` 只挡「不是人话」的（`textutil.strip_noise`），接话逻辑拿到的是原话
+  （它靠「嗯」「对」判断对方在听）；写记录时才去语气词、并段（`archive.paragraphs` + `textutil.tidy`，只删不改）；
+  改字只在会后的整理稿里做（`slow_brain.polish`，结果必须过 `checked_polish`）。调断句或识别参数后，
+  用真实的 `Ears` 喂一段夹着杂音的音频看交出来几句，别只看单元测试。
 - 它怎么接话分两层：时机在 `floor.py`（什么时候想、等、开口、让话，都有单元测试），
   说什么在 `fast_brain.py` 的提示词里。改提示词之后跑 `uv run python -m tests.scenarios` 逐场看效果。
 - 改设置只走 `Meeting.change_settings`（界面、接口、数字人自己调参与度都走它），不要直接改 `settings`。

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import struct
+import time
 
 import pytest
 from starlette.testclient import TestClient
@@ -202,6 +203,39 @@ def test_minutes_are_written_after_a_real_meeting_and_shown_to_the_next_one(clie
     wait_for(client, lambda s: "张总" in s["meetings"][0]["speakers"])
     assert "- 先做登录" in client.get("/api/meetings/latest").text
     assert "「登录排期」" in client.hub.briefing() and "- 先做登录" in client.hub.briefing()
+
+
+def test_the_polished_transcript_arrives_after_the_minutes(client):
+    client.hub.brain.replies = ["[静]"] * 20
+    client.hub.worker.polished = "[10:00:00] 张三：我们先做登录。"
+    client.hub.worker.polish_delay = 0.3            # 整理稿比纪要慢：纪要先出来，不等它
+    client.post("/api/meeting/start")
+    for i in range(5):
+        client.post("/api/utterance", json={"speaker": "张三", "text": f"那个第{i}点就是我们先做登录"})
+    wait_for(client, lambda s: len(s["lines"]) == 5)
+    client.post("/api/meeting/stop")
+    wait_for(client, lambda s: s["meetings"] and s["meetings"][0]["minutes"] == "yes")
+    assert "## 整理稿" not in client.get("/api/meetings/latest").text
+    deadline = time.time() + 3
+    while "## 整理稿" not in client.get("/api/meetings/latest").text and time.time() < deadline:
+        time.sleep(0.05)
+    text = client.get("/api/meetings/latest").text
+    assert text.index("## 纪要") < text.index("## 整理稿") < text.index("张三：我们先做登录。") < text.index("## 对话")
+    assert "- 先做登录" in text and not client.hub.minuting and not client.hub.polishing
+
+
+def test_no_polished_transcript_when_there_is_nothing_worth_minutes(client):
+    client.hub.brain.replies = ["[静]"] * 20
+    client.hub.worker.minutes = "无实质内容"
+    client.hub.worker.polished = "[10:00:00] 张三：电视里的声音。"
+    client.post("/api/meeting/start")
+    for i in range(5):
+        client.post("/api/utterance", json={"speaker": "张三", "text": f"电视里的声音{i}"})
+    wait_for(client, lambda s: len(s["lines"]) == 5)
+    client.post("/api/meeting/stop")
+    wait_for(client, lambda s: s["meetings"] and s["meetings"][0]["minutes"] == "none")
+    wait_for(client, lambda s: not client.hub.minuting and not client.hub.polishing)
+    assert "## 整理稿" not in client.get("/api/meetings/latest").text
 
 
 def test_short_meetings_get_minutes_only_on_request(client):

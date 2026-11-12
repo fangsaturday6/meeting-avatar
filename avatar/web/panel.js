@@ -161,9 +161,14 @@ function parseRecord(text) {
     const j = to ? rest.indexOf(`\n## ${to}\n`) : -1;
     return (j < 0 ? rest : rest.slice(0, j)).trim();
   };
-  const lines = between('对话', '后台任务').split('\n').map((l) => l.match(/^\[(\d\d:\d\d):\d\d\] ([^：]+)：(.*?)(（被打断）)?$/)).filter(Boolean)
+  const rows = (part) => part.split('\n').map((l) => l.match(/^\[(\d\d:\d\d):\d\d\] ([^：]+)：(.*?)(（被打断）)?$/)).filter(Boolean)
     .map((m) => ({ who: m[2] === meta.bot ? 'bot' : 'human', speaker: m[2], text: m[3], cut: !!m[4] }));
-  return { meta, minutes: between('纪要', '对话'), lines, tasks: between('后台任务', null) };
+  // 有整理稿（会后书面化的对话）就看整理稿，逐句原话留在文件里对照
+  const polished = rows(between('整理稿', '对话'));
+  return {
+    meta, minutes: between('纪要', polished.length ? '整理稿' : '对话'),
+    lines: polished.length ? polished : rows(between('对话', '后台任务')), tasks: between('后台任务', null),
+  };
 }
 
 function renderReader() {

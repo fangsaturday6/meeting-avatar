@@ -231,7 +231,7 @@ class Floor:
 
         sid = self.m.speakers.by_name(speaker_name) if speaker_name else self.m.speakers.assign(embedding, seconds)
         self.m.emit("speaker", speaker=self.m.speakers.speakers[sid].to_dict())
-        line = self.m.add_line("human", text, sid)
+        line = self.m.add_line("human", text, sid, seconds if speaker_name is None else 0.0)
         self._nudge_ok = True
         if is_backchannel(text) and self.m.settings.name not in text and self._resume(
                 f"（你说到一半时 [{line.speaker}] 附和了一声「{text}」，他在听，你已经把话接着说完：「" + "{said}」）"):

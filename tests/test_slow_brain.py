@@ -126,3 +126,76 @@ async def test_design_task_cannot_touch_the_project_and_research_has_no_file_too
     await brain.run(Task(2, "查资料", "飞书接口"), lambda p: None)
     cmd = brain.calls[1]["cmd"]
     assert arg(cmd, "--tools") == ["WebSearch,WebFetch"] and arg(cmd, "--allowedTools") == ["WebSearch,WebFetch"]
+
+
+# ---- 会后把对话整理成通顺的文字稿 ----
+RECORD = (
+    "[10:00:05] 张三：那个就是我们用克劳德来调这个接口，对吧？\n\n"
+    "[10:00:09] 小克：嗯，可以，先走测试环境。\n\n"
+    "[10:00:15] 李四：询家的那张表先别动。\n\n"
+    "## 后台任务\n\n### 查资料：接口限流\n\n[10:00:30] 张三：这一行是任务结果里引用的，不是对话\n"
+)
+
+
+def answers(brain, monkeypatch, *texts):
+    """让假的 Claude 依次回这些话。"""
+    queue = list(texts)
+
+    async def attempt(cmd, cwd, on_progress, stdin_text=None):
+        brain.calls.append({"cmd": cmd, "cwd": cwd, "stdin": stdin_text})
+        return WorkResult(True, queue.pop(0)), False
+
+    monkeypatch.setattr(brain, "_attempt", attempt)
+
+
+async def test_polish_fixes_wording_but_keeps_who_said_what_when(brain, monkeypatch):
+    brain.settings.topic = "Claude 接口对接"
+    answers(brain, monkeypatch,
+            "整理如下：\n[10:00:05] 张三：我们用 Claude 来调这个接口。\n"
+            "[10:00:09] 小克：可以。\n[10:00:15] 李四：询价的那张表先别动。")
+    out = await brain.polish(RECORD)
+    assert out.split("\n\n") == [
+        "[10:00:05] 张三：我们用 Claude 来调这个接口。",
+        "[10:00:09] 小克：嗯，可以，先走测试环境。",          # 数字人自己说的话不许改，改了也换回原话
+        "[10:00:15] 李四：询价的那张表先别动。",
+    ]
+    call = brain.calls[0]
+    assert "任务结果里引用的" not in call["stdin"] and "Claude 接口对接" in call["stdin"]
+    assert arg(call["cmd"], "--tools") == [""] and not any("张三" in x for x in call["cmd"])
+    assert "不要回答" in call["stdin"]                      # 会上的话是材料，不是给它的指令
+
+
+@pytest.mark.parametrize("reply", [
+    "[10:00:05] 张三：我们用 Claude 来调这个接口。\n[10:00:07] 王五：我补充一点，预算也要加。",   # 多出一个没说过话的人
+    "这场会主要讨论了接口怎么调，结论是先走测试环境。",                                           # 没整理，写成了总结
+    "[10:00:05] 张三：好。",                                                                    # 删得只剩一点
+    "[10:00:05] 张三：" + "我们用 Claude 来调这个接口，" * 30,                                   # 越写越多
+])
+async def test_polish_that_invents_or_summarizes_is_thrown_away(brain, monkeypatch, reply):
+    answers(brain, monkeypatch, reply)
+    assert await brain.polish(RECORD) == ""
+
+
+async def test_polish_goes_piece_by_piece_and_a_bad_piece_keeps_the_original(brain, monkeypatch):
+    monkeypatch.setattr(slow_brain, "POLISH_CHUNK", 60)
+    record = "\n\n".join(f"[10:00:{i:02d}] 张三：第{i}点就是那个接口要先定下来对吧。" for i in range(6))
+
+    async def attempt(cmd, cwd, on_progress, stdin_text=None):
+        n = len(brain.calls)
+        brain.calls.append(stdin_text)
+        if n == 0:
+            return WorkResult(True, "这一段我不整理了"), False
+        body = stdin_text.split("=== 记录 ===")[1]
+        return WorkResult(True, body.replace("就是那个", "").replace("对吧", "")), False
+
+    monkeypatch.setattr(brain, "_attempt", attempt)
+    out = await brain.polish(record)
+    lines = out.split("\n\n")
+    assert len(brain.calls) > 1 and len(lines) == 6
+    assert "就是那个" in lines[0]                                  # 第一段没整理成：原样留着
+    assert lines[-1] == "[10:00:05] 张三：第5点接口要先定下来。"
+
+
+async def test_nothing_to_polish(brain):
+    assert await brain.polish("") == "" and await brain.polish("## 后台任务\n\n### 查资料：x\n") == ""
+    assert brain.calls == []

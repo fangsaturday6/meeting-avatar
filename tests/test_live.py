@@ -9,7 +9,7 @@ from avatar.config import Settings
 from avatar.ears import Ears
 from avatar.fast_brain import FastBrain
 from avatar.mouth import Mouth
-from tests.audio import chunks, say_pcm, silence
+from tests.audio import chunks, noise_pcm, say_pcm, silence
 
 pytestmark = pytest.mark.live
 
@@ -36,6 +36,32 @@ async def test_ears_hear_one_sentence():
     assert events[:2] == ["start", "end"]
     assert len(got) == 1 and "登录" in got[0][0]
     ears.close()
+
+
+async def test_coughs_and_chairs_do_not_become_words():
+    """咳嗽、喘气、挪椅子夹在两句话中间：交出来的只有那两句话，没有「Yeah.」、假名、韩文。"""
+    if models.missing(include_optional=False):
+        pytest.skip("模型还没下载")
+    got = []
+
+    async def on_utt(text, emb, seconds=0.0):
+        got.append(text)
+
+    ears = Ears(lambda: None, lambda ago: None, on_utt)
+    ears.load()
+    noises = [noise_pcm(0.35, 200, 3000, 0.5), noise_pcm(0.5, 300, 2500, 0.4, seed=8), noise_pcm(0.8, 60, 600, 0.5, seed=9),
+              noise_pcm(1.2, 100, 1200, 0.08, seed=10), noise_pcm(1.5, 80, 900, 0.3, seed=11)]
+    pcm = silence(0.3) + say_pcm("我们先做登录功能。") + silence(1.2)
+    for n in noises:
+        pcm += n + silence(0.9)
+    pcm += say_pcm("下周三之前把接口文档发出来。") + silence(1.5)
+    for c in chunks(pcm):
+        ears.feed(c)
+        await asyncio.sleep(0)
+    await asyncio.sleep(3)
+    ears.close()
+    print(f"\n音频 {len(pcm)/32000:.1f}s，交出来：{got}")
+    assert len(got) == 2 and "登录" in got[0] and "接口文档" in got[1]
 
 
 async def test_mouth_speaks_locally_and_falls_back():

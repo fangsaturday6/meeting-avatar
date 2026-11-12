@@ -41,7 +41,10 @@ class ModelFile:
         return self.path.exists() and self.path.stat().st_size >= self.min_bytes
 
 
-VAD = ModelFile("silero_vad.onnx", (f"{_GH}/asr-models/silero_vad.onnx",), 500_000)
+# 断句。新版（v5）对咳嗽、喘气、挪椅子这类杂音稳得多；没下到就退回旧版，照样能开会，只是杂音多一些。
+VAD = ModelFile("silero_vad_v5.onnx", (f"{_GH}/asr-models/silero_vad_v5.onnx",), 2_000_000, optional=True,
+                sha256="6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396")
+VAD_OLD = ModelFile("silero_vad.onnx", (f"{_GH}/asr-models/silero_vad.onnx",), 500_000)
 ASR = ModelFile(
     "sense-voice.int8.onnx", (f"{_MS}/model.int8.onnx", f"{_HF}/model.int8.onnx"), 100_000_000,
     sha256="c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
@@ -77,7 +80,7 @@ TTS_FSTS = [
     _melo("new_heteronym.fst", 1000, git_sha1="478a809252067229211f7f414414f34f98314d9d"),
 ]
 TTS = [TTS_MODEL, TTS_LEXICON, TTS_TOKENS, *TTS_FSTS]
-ALL = [VAD, ASR, ASR_TOKENS, *TTS, SPEAKER]
+ALL = [VAD_OLD, VAD, ASR, ASR_TOKENS, *TTS, SPEAKER]
 
 
 def tts_ready() -> bool:

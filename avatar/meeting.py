@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Callable
@@ -28,6 +29,7 @@ class Line:
     speaker_id: int | None = None
     speaker: str = ""
     cut: bool = False        # 数字人这句话被打断了
+    seconds: float = 0.0     # 这句话说了多久（听来的才有；打字的、数字人说的是 0）
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -59,6 +61,7 @@ class Meeting:
         self.ended_at = 0.0
         self.title = ""                         # 会后纪要的标题和正文（整理出来之前是空的）
         self.summary = ""
+        self.polished = ""                      # 会后书面化的对话（整理稿），格式和存档里的「对话」一样
         self.on_settings: Callable[[list[str], str], None] | None = None   # 设置变了（谁改的都算）之后回调，用来存盘
         self._save_timer: asyncio.TimerHandle | None = None
         self.speakers = SpeakerBook()
@@ -107,7 +110,7 @@ class Meeting:
         self.board_task_id = None
         self.started_at = time.time()
         self.ended_at = 0.0
-        self.title = self.summary = ""
+        self.title = self.summary = self.polished = ""
         self.record_id = self.archive.new_id(self.started_at) if self.archive else ""
         self.emit("snapshot", state=self.snapshot())
 
@@ -144,8 +147,8 @@ class Meeting:
         except OSError:
             log.exception("会议记录没存上")
 
-    def set_minutes(self, title: str, summary: str) -> None:
-        self.title, self.summary = title, summary
+    def set_minutes(self, title: str, summary: str, polished: str = "") -> None:
+        self.title, self.summary, self.polished = title, summary, polished
         self.save()
 
     # ---- 设置 ----
@@ -164,10 +167,11 @@ class Meeting:
             self.emit("flag", name=name, value=value)
 
     # ---- 字幕 ----
-    def add_line(self, who: str, text: str, speaker_id: int | None = None) -> Line:
+    def add_line(self, who: str, text: str, speaker_id: int | None = None, seconds: float = 0.0) -> Line:
         self._line_id += 1
         name = self.settings.name if who == "bot" else (self.speakers.name_of(speaker_id) if who == "human" else "")
-        line = Line(id=self._line_id, t=time.time(), who=who, text=text, speaker_id=speaker_id, speaker=name)
+        line = Line(id=self._line_id, t=time.time(), who=who, text=text, speaker_id=speaker_id, speaker=name,
+                    seconds=seconds)
         self.lines.append(line)
         self.emit("line", line=line.to_dict())
         self._save_soon()
@@ -182,7 +186,11 @@ class Meeting:
         self._save_soon()
 
     def rename_speaker(self, speaker_id: int, name: str) -> dict:
+        old = self.speakers.name_of(speaker_id)
         sp = self.speakers.rename(speaker_id, name)
+        if self.polished and old != sp.name:    # 整理稿是成文的，行首的名字跟着改
+            self.polished = re.sub(rf"(?m)^(\[[\d:]+\] ){re.escape(old)}：", lambda m: f"{m.group(1)}{sp.name}：",
+                                   self.polished)
         for line in self.lines:
             if line.who == "human" and line.speaker_id == speaker_id:
                 line.speaker = sp.name

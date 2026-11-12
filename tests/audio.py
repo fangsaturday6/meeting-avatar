@@ -54,3 +54,16 @@ def local_pcm(text: str, speed: float = 1.0) -> bytes:
     n = int(len(x) * 16000 / w.getframerate())
     y = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
     return y.astype(np.int16).tobytes()
+
+
+def noise_pcm(seconds: float, low: float, high: float, volume: float, seed: int = 7) -> bytes:
+    """一阵杂音：某个频段的噪声，渐强渐弱。低频的像挪椅子，中频的像咳嗽、喘气。"""
+    import numpy as np
+
+    n = int(16000 * seconds)
+    spectrum = np.fft.rfft(np.random.default_rng(seed).normal(0, 1, n))
+    freqs = np.fft.rfftfreq(n, 1 / 16000)
+    spectrum[(freqs < low) | (freqs > high)] = 0
+    x = np.fft.irfft(spectrum, n)
+    x = x / (np.abs(x).max() + 1e-9) * np.hanning(n) ** 0.5 * volume
+    return (x * 32767).astype(np.int16).tobytes()
