@@ -43,6 +43,7 @@ export const api = {
   meetings: () => call('GET', '/api/meetings'),
   meeting: (id) => callText(`/api/meetings/${encodeURIComponent(id)}`),
   makeMinutes: (id) => call('POST', `/api/meetings/${encodeURIComponent(id)}/minutes`),
+  figures: () => call('GET', '/api/figures'),
 };
 
 function upsert(list, item) {

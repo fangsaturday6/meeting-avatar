@@ -1,7 +1,9 @@
 // 主窗口：状态 → 五块视图（形象、资料板、字幕、提示、控制条）。收音和播放交给 audio.js。
 // 网址参数：?autostart=1 开会时免点击接通声音（桌面应用用）；
 //          ?pose=thinking&hearing&working&muted 强行指定神态（看效果、截图用）；
-//          ?bust 只留头和肩、不显示控制条（生成应用图标用）。
+//          ?bust 只留头和肩、不显示控制条（生成应用图标用）；
+//          ?model=名字 指定用 models/ 里的哪个形象，?model=0 用代码搭的那个（挑形象时对比用）；
+//          ?mouth=0.8 嘴张到多大（0~1，看说话时的口型用）。
 import { api, connectEvents, emptyState, esc, STATUS_TEXT } from './api.js';
 import { createAudioHost } from './audio.js';
 import { mountAvatar } from './avatar.js';
@@ -248,9 +250,19 @@ $('stage').addEventListener('pointermove', () => showDock());
 window.addEventListener('storage', (e) => { if (e.key === 'stage-devices' && host.running) reconfigure(); });
 window.shell?.onAction((name) => actions[name]?.());
 
+// 用哪个形象文件：网址里点名的 → 叫 figure 的 → 目录里的第一个；一个都没有就用代码搭的
+async function chooseFigure() {
+  const r = await api.figures(), all = r.ok ? r.data.figures : [];
+  if (params.has('model')) return all.find((f) => f.name === params.get('model')) || null;
+  return all.find((f) => f.name === 'figure') || all[0] || null;
+}
+
 // 3D 形象起不来（没有 WebGL）就退回 2D 形象
-import('./character.js')
-  .then(({ mountCharacter }) => { figure = mountCharacter($('avatar'), { bust: params.has('bust') }); })
+Promise.all([import('./character.js'), chooseFigure()])
+  .then(([{ mountCharacter }, model]) => {
+    figure = mountCharacter($('avatar'), { bust: params.has('bust'), model });
+    if (params.has('mouth')) figure.setMouth(+params.get('mouth') || 0);
+  })
   .catch(() => { figure = { setState() {}, ...mountAvatar($('avatar')) }; })
   .finally(renderScene);
 

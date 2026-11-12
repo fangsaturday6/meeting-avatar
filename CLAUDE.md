@@ -39,7 +39,9 @@
   再加 `&hearing`、`&working`、`&muted`。
 - 给桌面应用截图（不需要屏幕录制权限）：
   `cd app && AVATAR_URL=http://127.0.0.1:8767 AVATAR_PAGE='/?pose=waiting' AVATAR_THEME=dark AVATAR_SHOT=/tmp/x.png npx electron .`
-- 3D 形象在 `character.js`：`build()` 搭模型，`POSES` 是每种状态的姿势，颜色从 CSS 变量 `--tone` 读。
+- 3D 形象：`avatar/web/models/figure.glb`，由 `tools/figure.py`（Blender 脚本）从用户定的造型绑骨、做动作后导出；`model.js` 负责加载、
+  按状态播动作、驱动脸。改动作改 `tools/figure.py` 的 `CLIPS` 再重新导出，各状态长什么样见 README「换形象」。
+  没有这个文件时用 `character.js` 里代码搭的备用形象（`build()` 搭模型，`POSES` 是每种状态的姿势）。颜色都从 CSS 变量 `--tone` 读。
   形象是原创的，不要照着现成的游戏或影视角色做。
 - 浏览器预览面板不给麦克风、会拦内嵌的设计稿页面，这两样要在桌面应用里验证。
 

@@ -29,6 +29,22 @@ log = logging.getLogger("avatar.api")
 MINUTES_MIN_LINES = 3     # 别人至少说了这么多句，结束时才自动整理纪要
 BACKFILL = 10             # 启动时最多给这么多场没有纪要的旧会补纪要
 WEB = Path(__file__).parent / "web"
+FIGURES = WEB / "models"  # 3D 形象文件：<名字>.glb，另可带 <名字>.<状态>.glb 作为那种状态的动作
+POSES = ("off", "starting", "listening", "thinking", "waiting", "speaking")
+
+
+def list_figures(folder: Path) -> list[dict]:
+    """目录里有哪些形象，各带了哪些状态的动作文件。"""
+    figures: dict[str, dict] = {}
+    files = sorted(folder.glob("*.glb")) if folder.is_dir() else []
+    for f in files:                                   # 先认形象本体，再把动作文件归到它名下
+        if "." not in f.stem:
+            figures[f.stem] = {"name": f.stem, "url": f"/static/models/{f.name}", "motions": {}}
+    for f in files:
+        name, _, pose = f.stem.partition(".")
+        if pose in POSES and name in figures:
+            figures[name]["motions"][pose] = f"/static/models/{f.name}"
+    return list(figures.values())
 
 
 FRESH = {"Cache-Control": "no-cache"}   # 每次都向后台确认有没有变（没变只回 304）
@@ -351,6 +367,11 @@ def create_app(hub: Hub | None = None) -> FastAPI:
         if was_active and sum(l.who == "human" for l in hub.meeting.lines) >= MINUTES_MIN_LINES:
             hub.make_minutes(hub.meeting.record_id)
         return hub.state()
+
+    # ---------- 形象 ----------
+    @app.get("/api/figures")
+    def get_figures():
+        return {"figures": list_figures(FIGURES)}
 
     # ---------- 会议记录 ----------
     @app.get("/api/meetings")

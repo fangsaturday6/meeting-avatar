@@ -48,9 +48,22 @@ def test_pages_keep_their_ids(client, path, expected):
 
 
 def test_page_assets_are_served(client):
-    for name in ["stage.js", "panel.js", "character.js", "avatar.js", "audio.js", "api.js", "icons.js", "common.css",
-                 "vendor/three/three.module.js", "vendor/three/three.core.js", "vendor/three/RoomEnvironment.js"]:
+    for name in ["stage.js", "panel.js", "character.js", "model.js", "avatar.js", "audio.js", "api.js", "icons.js", "common.css",
+                 "vendor/three/three.module.js", "vendor/three/three.core.js", "vendor/three/RoomEnvironment.js",
+                 "vendor/three/GLTFLoader.js", "vendor/three/BufferGeometryUtils.js", "vendor/three/SkeletonUtils.js"]:
         assert client.get(f"/static/{name}").status_code == 200, name
+
+
+def test_figures_lists_models_with_their_motions(client, tmp_path, monkeypatch):
+    from avatar import api
+    monkeypatch.setattr(api, "FIGURES", tmp_path / "none")
+    assert client.get("/api/figures").json() == {"figures": []}          # 没有目录也不报错
+
+    monkeypatch.setattr(api, "FIGURES", tmp_path)
+    for name in ["butcher.glb", "butcher.thinking.glb", "butcher.dance.glb", "orphan.waiting.glb", "notes.txt"]:
+        (tmp_path / name).write_bytes(b"")
+    assert client.get("/api/figures").json() == {"figures": [
+        {"name": "butcher", "url": "/static/models/butcher.glb", "motions": {"thinking": "/static/models/butcher.thinking.glb"}}]}
 
 
 def test_every_page_action_has_an_api():

@@ -155,6 +155,7 @@ uv run python -m avatar.connect
 | POST | `/api/tasks` `{kind, brief}` | 直接派后台任务，kind 为 查资料 / 查代码 / 查会议 / 做设计 |
 | POST | `/api/board` `{task_id}` | 选择资料板显示哪个任务，`null` 为收起 |
 | PATCH | `/api/settings` | 改设置，字段见下表 |
+| GET | `/api/figures` | `avatar/web/models/` 里有哪些 3D 形象文件，各带了哪些状态的动作文件 |
 | GET | `/api/meetings` | 会议记录列表，新的在前：编号、起止时间、标题、句数、说话人、有没有纪要、文件路径 |
 | GET | `/api/meetings/{id}` | 一场会的完整内容（Markdown 文本）；`id` 写 `latest` 是最近一场 |
 | POST | `/api/meetings/{id}/minutes` | 整理（或重新整理）这场会的纪要，后台进行，完成后事件流里有 `minutes` 事件 |
@@ -211,10 +212,39 @@ uv run python -m avatar.connect
 | `avatar/api.py` | REST 和 WebSocket |
 | `avatar/web/stage.*` | 主窗口：形象、资料板、字幕、提示、控制条 |
 | `avatar/web/panel.*` | 设置窗口：记录和设置 |
-| `avatar/web/character.js` | 3D 形象，全部用代码建模（three.js，放在 `vendor/` 里，不联网）；`avatar.js` 是不支持 3D 时的 2D 备用形象 |
+| `avatar/web/character.js` | 3D 舞台（镜头、灯光、状态色）和代码搭的备用形象（three.js，放在 `vendor/` 里，不联网）；`avatar.js` 是不支持 3D 时的 2D 备用形象 |
+| `avatar/web/model.js` | 从 `avatar/web/models/` 加载做好的 3D 形象（GLB 文件），按状态播动作、驱动脸 |
+| `tools/figure.py` | Blender 脚本：给形象绑骨、做每种状态的动作、导出 GLB |
 | `avatar/web/api.js`、`audio.js` | 接口与状态、收音与播放（两个窗口共用） |
 | `avatar/demo.py` | 演示后台：不需要模型、网络和 Claude，数据放临时目录 |
 | `app/` | 桌面外壳（Electron）：起后台、开窗口、菜单；`pack.js` 打包，`setup.js` 安装 Electron |
+
+## 换形象
+
+现在的形象是「可爱屠夫打工人」：造型在 `~/Documents/3D-Characters/cute-butcher/`（`build_character.py` 生成 `cute-butcher.blend`，
+静态、没有骨骼）；`tools/figure.py` 读它，绑骨、给每种状态做动作，导出 `avatar/web/models/figure.glb`。改了造型或动作后重跑：
+
+```sh
+/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python tools/figure.py
+```
+
+| 状态 | 身体（动作片段，在 `tools/figure.py` 的 `CLIPS` 里） | 脸（页面按实时数据驱动，在 `model.js` 的 `FACE` 里） |
+|---|---|---|
+| 未开会 `off` | 垂头弓背，慢呼吸 | 闭眼 |
+| 在听 `listening` | 站着呼吸，重心轻晃；有人说话时前倾 | 眨眼、眼神游移；有人说话时抬眉 |
+| 在想 `thinking` | 左手捋胡子，抬头 | 半眯眼，往斜上方看 |
+| 想发言 `waiting` | 举左手挥，腰间钩子跟着晃 | 抬眉 |
+| 在说 `speaking` | 左手在身前比划 | 胡子（下巴）按音量开合 |
+
+状态色出现在脚下的光圈、轮廓光和耳机两侧的标志上；后台在干活时有两颗小光球绕着头转。
+
+换别的模型：把 GLB 放进 `avatar/web/models/`（这个目录不进 git），刷新就生效，不用改代码。
+
+- `名字.glb`：形象本体。动作片段叫状态名就在那种状态播；只有静态模型也能用，靠整体起伏和点头表现神态。
+- `名字.thinking.glb` 这样的文件：那种状态单独的动作，可选，要和本体是同一副骨骼。
+- 目录里有多个形象时用叫 `figure.glb` 的，没有就用第一个；`/?model=名字` 临时看某一个，`/?model=0` 看代码搭的备用形象，
+  `/?pose=speaking&mouth=0.8` 看张嘴。
+- 骨骼和材质的命名约定写在 `model.js` 开头。形象要原创，不要用现成游戏里的角色模型。
 
 ## 测试
 
