@@ -1,0 +1,17 @@
+{
+  "name": "meeting-avatar-app",
+  "productName": "小克",
+  "version": "0.1.0",
+  "private": true,
+  "description": "会议数字人的桌面外壳：一个窗口、一个菜单，界面由本机后台提供",
+  "main": "main.js",
+  "scripts": {
+    "postinstall": "node setup.js",
+    "start": "electron .",
+    "demo": "AVATAR_URL=http://127.0.0.1:8767 electron .",
+    "pack": "node pack.js"
+  },
+  "devDependencies": {
+    "electron": "43.3.0"
+  }
+}
