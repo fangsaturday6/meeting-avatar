@@ -7,7 +7,7 @@
 //   骨骼 jaw、browL / browR、eyeL / eyeR 由这里按实时数据转（张嘴、抬眉、眼神），
 //   lidL / lidR 是眼皮：沿骨骼方向压扁 = 睁眼，放开 = 闭眼；
 //   名字以 glow 开头的材质叠上状态色。
-// 对外只有 loadModel(figure) → { root, materials, update }。光、状态色、镜头都在 character.js。
+// 对外只有 loadModel(figure) → { root, materials, radius, update, poke }。光、状态色、镜头、脚下的刻度环都在 character.js。
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/three/GLTFLoader.js';
 
@@ -94,15 +94,11 @@ export async function loadModel(figure) {
   const holder = new THREE.Group();
   holder.add(body); holder.scale.setScalar(scale);
 
-  // 脚下一圈光：颜色 = 状态色，跟着听到的声音起伏
   const glows = materials.filter((m) => /^glow/i.test(m.name));
-  const ringR = Math.min(Math.max(size.x, size.z) * scale * 0.5 + 0.2, HEIGHT * 0.42);
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0x888888, transparent: true, opacity: 0, toneMapped: false, depthWrite: false });
-  const ring = new THREE.Mesh(new THREE.RingGeometry(ringR, ringR + 0.09, 96), ringMat);
-  ring.rotation.x = -Math.PI / 2; ring.position.y = 0.012;
+  const radius = Math.min(Math.max(size.x, size.z) * scale * 0.5 + 0.2, HEIGHT * 0.42);     // 脚下的刻度环画多大：比人宽一点
 
   const root = new THREE.Group();
-  root.add(holder, ring);
+  root.add(holder);
 
   // ---------- 动作 ----------
   const mixer = new THREE.AnimationMixer(body);
@@ -153,7 +149,7 @@ export async function loadModel(figure) {
   let lookX = 0, lookY = 0, lookAt = 0, blink = 0, blinkAt = 2;
 
   return {
-    root, materials,
+    root, materials, radius,
     // 点了他一下：在听的时候马上来一个小动作
     poke() { poked = true; },
     // lv：{ mouth, ear, glow, tone, calm }，由 character.js 每帧算好传进来
@@ -208,10 +204,6 @@ export async function loadModel(figure) {
       }
 
       for (const m of glows) m.emissive.copy(lv.tone).multiplyScalar(lv.glow * (1.5 + lv.ear * 1.3 + lv.mouth * 0.8));
-
-      ringMat.color.copy(lv.tone);
-      ringMat.opacity = lv.glow * (st.muted ? 0.18 : 0.5 + lv.mouth * 0.4);
-      ring.scale.setScalar(1 + lv.ear * 0.1 + lv.mouth * 0.05);
     },
   };
 }

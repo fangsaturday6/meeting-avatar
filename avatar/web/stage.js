@@ -1,11 +1,12 @@
 // 主窗口：状态 → 五块视图（形象、资料板、字幕、提示、控制条）。收音和播放交给 audio.js。
 // 网址参数：?autostart=1 开会时免点击接通声音（桌面应用用）；
 //          ?pose=thinking&hearing&working&muted 强行指定神态（看效果、截图用）；
+//          ?clock=47 当作会议已经开了 47 分钟（看脚下的刻度环和控制条里的时间用）；
 //          ?bust 只留头和肩、不显示控制条（生成应用图标用）；
 //          ?model=名字 指定用 models/ 里的哪个形象，?model=0 用代码搭的那个（挑形象时对比用）；
 //          ?mouth=0.8 嘴张到多大（0~1，看说话时的口型用）；?turn=135 转过多少度站着（看侧面和背面用）；
 //          ?act=idle-jump 反复播某一个小动作（调动作用）。
-import { api, connectEvents, emptyState, esc, STATUS_TEXT } from './api.js';
+import { api, clockText, connectEvents, emptyState, esc, STATUS_TEXT } from './api.js';
 import { createAudioHost } from './audio.js';
 import { mountAvatar } from './avatar.js';
 import { fillIcons } from './icons.js';
@@ -14,6 +15,7 @@ import { renderMarkdown } from './md.js';
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const AUTO = params.get('autostart') === '1';
+const CLOCK = params.has('clock') ? Date.now() / 1000 - (+params.get('clock') || 0) * 60 : 0;
 const state = emptyState();
 const ui = { link: 'idle', connecting: false, busy: false, error: '', micError: '', caption: '', heard: null, heardTimer: 0, lastLineId: -1, boardKey: '', scene: '', dockTimer: 0, pinDock: true };
 const devices = () => { try { return JSON.parse(localStorage.getItem('stage-devices') || '{}'); } catch { return {}; } };
@@ -32,6 +34,8 @@ const isActive = () => state.status !== 'off';
 const silentMic = () => state.mic_online && state.mic_health === 'silent';
 const deaf = () => isActive() && state.stage_online && (!state.mic_online || silentMic()) && !ui.connecting;
 const running = () => state.tasks.filter((t) => t.status === 'running');
+// 这场会是什么时候开始的（秒）。没在开会 = 0
+const since = () => CLOCK || (isActive() ? state.started_at || 0 : 0);
 
 // 画面要表现的神态
 function look() {
@@ -40,6 +44,7 @@ function look() {
     hearing: params.has('hearing') || state.humans_speaking,
     working: params.has('working') || running().length > 0,
     muted: params.has('muted') || state.muted,
+    since: since(),
     only: params.get('act') || '',
   };
 }
@@ -150,7 +155,14 @@ function renderDock() {
   if (ui.pinDock) showDock();
 }
 
-// 开会后控制条自动收起，鼠标动一下再出来
+// 开了多久：开会时一直显示（控制条收起后只剩它），没开会不显示。脚下的刻度环是同一个时间，在 character.js 里画
+function renderClock() {
+  const from = since(), el = $('meeting-time');
+  el.hidden = !from;
+  if (from) el.textContent = clockText(Date.now() / 1000 - from);
+}
+
+// 开会后控制条自动收起（只留开会时间，见 stage.css），鼠标动一下再出来
 function showDock() {
   $('stage').dataset.dock = 'show';
   clearTimeout(ui.dockTimer);
@@ -171,7 +183,7 @@ function noteHeard() {
 function render(part) {
   if (part === 'all') ui.lastLineId = state.lines.length ? state.lines[state.lines.length - 1].id : -1;
   if (part === 'lines') return noteHeard();
-  renderScene(); renderAlerts(); renderDock();
+  renderScene(); renderAlerts(); renderDock(); renderClock();
   if (part === 'all' || part === 'tasks') { renderBoard(); renderCaption(); }
   if (part === 'all' || part === 'status') syncAudio();
   if (part === 'settings' && host.running && state.settings.scene !== ui.scene) reconfigure();
@@ -278,3 +290,4 @@ Promise.all([import('./character.js'), chooseFigure()])
 
 connectEvents(state, render);
 render('all');
+setInterval(renderClock, 1000);

@@ -281,6 +281,7 @@ uv run python -m avatar.connect
 | `#btn-stop` 结束会议 | `POST /api/meeting/stop` |
 | `#btn-mute` 静音 | `POST /api/mute` |
 | `#btn-hush` 让它停下 | `POST /api/hush` |
+| `#meeting-time` 开了多久（开会时一直显示，没开会不显示；控制条收起后只剩它） | 只读：`GET /api/state` 的 `started_at`（开始时刻，秒）自己算 |
 | `#btn-board-close` 收起资料板、「记录」里的 `.task[data-task-id]` | `POST /api/board` |
 | `#composer`（`#say-kind` 选「说话」） | `POST /api/utterance`，说话人是设置里「我的名字」 |
 | `#composer`（`#say-kind` 选任务类型） | `POST /api/tasks` |
@@ -299,7 +300,7 @@ uv run python -m avatar.connect
 只是看着玩，不改任何状态，所以没有对应接口；它周围的空白照旧用来拖动窗口。
 
 主窗口的网址参数：`?autostart=1` 会议一开始就免点击接通声音（桌面应用默认带）；
-`?pose=thinking&hearing&working&muted` 强行指定神态，看效果和截图用。
+`?pose=thinking&hearing&working&muted` 强行指定神态，看效果和截图用；再加 `&clock=47` 当作已经开了 47 分钟。
 
 常用设置（`PATCH /api/settings`，设置窗口里都有对应的控件）：
 
@@ -377,7 +378,9 @@ uv run python -m avatar.connect
 小动作（片段名以 `idle-` 开头）：扶耳机点头、原地跳、甩钩子（带着铁链横着甩出去，到头溅血，再一把拽回来接住）、伸懒腰、拍肚子、左右张望。
 点他一下（不拖动）会马上来一个；有人说话时他不做小动作，专心听。要加新的，在 `CLIPS` 里加一个 `idle-名字` 就行，页面不用改。
 
-状态色出现在脚下的光圈、轮廓光、耳机两侧的标志和电脑上；后台在干活时有两颗小光球绕着头转。
+状态色出现在脚下的刻度环、轮廓光、耳机两侧的标志和电脑上；后台在干活时有两颗小光球绕着头转。
+脚下的刻度环同时是这场会的钟（`dial.js`）：一圈一小时，从他身后正中起顺时针亮起来，正右边是一刻钟、最靠前是半小时，
+亮段头上的小圆点是「现在」；走满一小时底圈变亮、再从头走。准确的数字开会时一直显示在窗口底部（`#meeting-time`）。
 
 换别的模型：把 GLB 放进 `avatar/web/models/`（除了自带的 `figure.glb`，这个目录里的文件不进 git），刷新就生效，不用改代码。
 

@@ -88,7 +88,7 @@ export function reduce(state, ev) {
 
 export function emptyState() {
   return {
-    status: 'off', muted: false, brain_ok: true, stage_online: false, humans_speaking: false,
+    status: 'off', started_at: 0, muted: false, brain_ok: true, stage_online: false, humans_speaking: false,
     mic_online: true,   // 接通声音的窗口有没有把麦克风的声音送到后台；后台没报之前先当它有
     mic_health: 'ok',   // silent = 送来的一直是数字静音（麦克风被关了、没权限）
     recording: true,    // 假 = 有人说了「这段别记」：照样听，但不进记录、不录音
@@ -120,6 +120,13 @@ export function connectEvents(state, onChange) {
 export const STATUS_TEXT = {
   off: '未开会', starting: '正在入会', listening: '在听', thinking: '在想', waiting: '想发言', speaking: '在说',
 };
+
+// 开了多久：不到一小时写成 47:05，过了一小时写成 1:07:05
+export function clockText(seconds) {
+  const s = Math.max(0, Math.floor(seconds)), pad = (n) => String(n).padStart(2, '0');
+  const rest = `${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${rest}` : rest;
+}
 
 export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

@@ -32,12 +32,16 @@ body { overflow: hidden; }
 #alerts { position: absolute; top: 34px; left: 16px; right: 16px; }
 #ai-tag:not([hidden]) ~ #alerts { top: 72px; }
 
-/* 控制条：会前一直在；开会后鼠标动一下才出来 */
-#dock { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 999px; background: var(--glass); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent), 0 10px 30px rgba(0, 0, 0, .12); transition: opacity .25s ease, transform .25s ease; }
-#stage[data-dock="hide"] #dock:not(:focus-within) { opacity: 0; transform: translate(-50%, 10px); pointer-events: none; }
+/* 控制条：会前一直在；开会后收成只剩开会时间，鼠标动一下按钮才出来 */
+#dock { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; padding: 6px; border-radius: 999px; background: var(--glass); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent), 0 10px 30px rgba(0, 0, 0, .12); transition: background .25s ease, box-shadow .25s ease, gap .25s ease; }
+#dock > * { transition: width .25s ease, padding .25s ease, margin .25s ease, opacity .2s ease, background .15s, font-size .25s ease; }
+#stage[data-dock="hide"] #dock:not(:focus-within) { background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; gap: 0; pointer-events: none; }
+#stage[data-dock="hide"] #dock:not(:focus-within) > :not(#meeting-time) { width: 0; height: 0; padding: 0; margin: 0; opacity: 0; overflow: hidden; }
+#stage[data-dock="hide"] #dock:not(:focus-within) #meeting-time { padding: 0 12px; font-size: clamp(15px, 2.6vmin, 24px); }
 #btn-start { border: 0; border-radius: 999px; height: 40px; padding: 0 26px; font-weight: 600; font-size: 15px; background: var(--ink); color: var(--bg); white-space: nowrap; }
 #btn-start:hover { opacity: .88; }
 #btn-start:disabled { opacity: .5; cursor: default; }
+#meeting-time { padding: 0 6px 0 12px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink2); white-space: nowrap; }
 #dock-gap { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
 /* 资料板出来时，控制条挪到它脚下，不压住资料 */
 #stage[data-board="on"] #dock { left: max(120px, 17%); }
@@ -62,4 +66,12 @@ body { overflow: hidden; }
   #board { margin: 0 12px 84px; }
   #stage[data-board="on"] #dock { left: 50%; }
   #stage[data-board="on"] #caption { display: none; }
+}
+
+/* 很窄的窗口：开会时间单独占一行，按钮挤紧一点，免得两头被截掉 */
+@media (max-width: 400px) {
+  #dock, #stage[data-board="on"] #dock { left: 0; right: 0; width: fit-content; max-width: calc(100% - 16px); margin: 0 auto; transform: none; flex-wrap: wrap; justify-content: center; gap: 2px; border-radius: 22px; }
+  #dock .icon-btn { width: 34px; height: 34px; }
+  #btn-start { padding: 0 18px; }
+  #meeting-time { flex-basis: 100%; text-align: center; padding: 2px 0 0; }
 }

@@ -1,9 +1,10 @@
-// 3D 形象：舞台（镜头、灯光、状态色）加一个代码搭的原创大块头（光头、大胡子、皮围裙、耳麦）。
+// 3D 形象：舞台（镜头、灯光、状态色、脚下的刻度环）加一个代码搭的原创大块头（光头、大胡子、皮围裙、耳麦）。
 // 传了 model 就换成从文件加载的形象（见 model.js），文件读不出来时留在代码搭的这个上。
 // 对外只有 mountCharacter(root)，返回 { setState, setMouth, setEar }，和 2D 形象（avatar.js）接口一致。
 // 状态色不写在这里：从 root 上的 CSS 变量 --tone 读，颜色只在 common.css 里定义一次。
 import * as THREE from 'three';
 import { RoomEnvironment } from './vendor/three/RoomEnvironment.js';
+import { createDial } from './dial.js';
 
 const SKIN = 0xc8834f, HAIR = 0x2b1a12, APRON = 0x3b4654, LEATHER = 0x6a442c, LEATHER_DARK = 0x2a1e18;
 const CLOTH = 0x54463a, STEEL = 0x9aa3ad, BRASS = 0xd0a548, RUBBER = 0x1d2026;
@@ -261,6 +262,7 @@ const HEARING = { lid: -0.3, brow: 0.6, lean: 0.07, headZ: -0.06 };
 const TURN = Math.PI * 2;
 const SPIN_PER_PX = 0.011;     // 拖一个像素转多少弧度（拖过大半个身子正好转一圈）
 const SPIN_HOME = 3;           // 松手几秒后自己转回正面
+const DIAL_RADIUS = 1.5;       // 代码搭的形象脚下的刻度环画多大（从文件加载的形象按自己的身材算）
 
 export function mountCharacter(root, { bust = false, model = null, grip = null, turn = 0 } = {}) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });   // 不支持 WebGL 时这里会抛错，由调用方退回 2D 形象
@@ -307,6 +309,10 @@ export function mountCharacter(root, { bust = false, model = null, grip = null, 
   };
   rim.forEach(addRim);
 
+  // 脚下的刻度环：放在舞台上、不跟着人转身，否则一拖就读不准了
+  let dial = null;
+  const layDial = (radius) => { dial = createDial(radius); scene.add(dial.mesh); };
+
   // 从文件加载的形象：顶替代码搭的那个（加载期间台上先空着，免得闪一下旧形象），绕头的小光球留用。
   // 文件读不出来才把代码搭的请回来
   let file = null;
@@ -316,15 +322,16 @@ export function mountCharacter(root, { bust = false, model = null, grip = null, 
       file = m;
       m.materials.forEach(addRim);
       scene.add(m.root, J.orbit);
-    }, () => { J.body.visible = true; });
-  }
+      layDial(m.radius);
+    }, () => { J.body.visible = true; layDial(DIAL_RADIUS); });
+  } else layDial(DIAL_RADIUS);
 
   const floor = new THREE.Mesh(new THREE.CircleGeometry(4, 48), new THREE.ShadowMaterial({ opacity: 0.26 }));
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true;
   scene.add(floor);
 
   // ---------- 状态 ----------
-  const st = { status: 'off', hearing: false, working: false, muted: false };
+  const st = { status: 'off', hearing: false, working: false, muted: false, since: 0 };     // since：会议开始的时刻（秒），0 = 不知道
   const cur = { ...REST, ...POSES.off }, tgt = { ...cur };
   let mouth = 0, mouthIn = 0, ear = 0, earIn = 0, boom = 0, orbit = 0;
   let blinkAt = 2, blink = 0, lookAt = 3, lookX = 0, lookY = 0;
@@ -466,6 +473,11 @@ export function mountCharacter(root, { bust = false, model = null, grip = null, 
     fill.intensity = 0.36 + g * 0.2;
 
     if (file) file.update(dt, t, st, { mouth, ear, glow: g, tone: toneNow, calm });
+    // 刻度环：颜色 = 状态色，静音时暗下去，跟着听到和说出的声音起伏
+    dial?.update({
+      seconds: st.since ? Date.now() / 1000 - st.since : null,
+      tone: toneNow, level: g * (st.muted ? 0.18 : 0.5 + mouth * 0.4), swell: 1 + ear * 0.1 + mouth * 0.05,
+    });
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
   }

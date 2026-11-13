@@ -10,7 +10,7 @@ from avatar.api import create_app
 
 # 界面元素的稳定名字。AI Agent 和桌面应用的菜单靠这些 id 找按钮，改版时不能改名。
 STAGE_IDS = ["stage", "avatar", "avatar-grip", "status-text", "ai-tag", "board", "board-kind", "board-brief", "board-body", "board-open",
-             "btn-board-close", "caption", "alerts", "dock", "btn-start", "btn-mute", "btn-hush", "btn-stop",
+             "btn-board-close", "caption", "alerts", "dock", "meeting-time", "btn-start", "btn-mute", "btn-hush", "btn-stop",
              "btn-notes", "btn-settings"]
 PANEL_IDS = ["panel", "tab-notes", "tab-settings", "alerts", "btn-meetings", "tasks", "transcript", "composer", "say-kind",
              "say-text", "btn-send", "composer-error", "meetings", "reader", "reader-title", "reader-sub", "btn-reader-close",
@@ -51,7 +51,7 @@ def test_pages_keep_their_ids(client, path, expected):
 
 
 def test_page_assets_are_served(client):
-    for name in ["stage.js", "panel.js", "character.js", "model.js", "avatar.js", "audio.js", "api.js", "icons.js", "common.css",
+    for name in ["stage.js", "panel.js", "character.js", "model.js", "dial.js", "avatar.js", "audio.js", "api.js", "icons.js", "common.css",
                  "vendor/three/three.module.js", "vendor/three/three.core.js", "vendor/three/RoomEnvironment.js",
                  "vendor/three/GLTFLoader.js", "vendor/three/BufferGeometryUtils.js", "vendor/three/SkeletonUtils.js"]:
         assert client.get(f"/static/{name}").status_code == 200, name

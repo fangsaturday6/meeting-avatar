@@ -41,7 +41,7 @@
   不往主窗口上加文字和按钮。
 - 改界面用演示后台，不需要模型和 Claude：`uv run python -m avatar.demo`（8767 端口，`--autoplay` 自动演一场会）。
 - 看某个神态：`http://127.0.0.1:8767/?pose=thinking`，可选 `off / starting / listening / thinking / waiting / speaking`，
-  再加 `&hearing`、`&working`、`&muted`。
+  再加 `&hearing`、`&working`、`&muted`，`&clock=47` 当作已经开了 47 分钟（看脚下的刻度环 `dial.js` 和控制条里的时间）。
 - 给桌面应用截图（不需要屏幕录制权限）：
   `cd app && AVATAR_URL=http://127.0.0.1:8767 AVATAR_PAGE='/?pose=waiting' AVATAR_THEME=dark AVATAR_SHOT=/tmp/x.png npx electron .`
 - 3D 形象：`avatar/web/models/figure.glb`，由 `tools/figure.py`（Blender 脚本）从用户定的造型绑骨、做动作后导出；`model.js` 负责加载、
