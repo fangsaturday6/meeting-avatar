@@ -64,7 +64,19 @@
     <hr>
     <label>麦克风<select id="mic-select"></select></label>
     <label>扬声器<select id="speaker-select"></select></label>
+    <label>录音<select id="set-keep-audio" name="keep_audio"></select></label>
     <hr>
+    <!-- 常用词：人名、公司名、行话。一行一个，改完离开输入框就存；也可以导入一份名单（只追加没有的） -->
+    <section id="glossary" aria-labelledby="glossary-label">
+      <div id="glossary-head">
+        <h2 id="glossary-label">常用词</h2><output id="glossary-count" for="glossary-text"></output>
+        <button id="btn-glossary-import" class="text-btn" type="button" disabled>导入文件</button>
+        <input id="glossary-file" type="file" accept=".txt,.csv,.tsv,.md,.yaml,.yml,text/plain,text/csv" multiple hidden>
+      </div>
+      <textarea id="glossary-text" rows="5" spellcheck="false" aria-labelledby="glossary-label" disabled
+        placeholder="一行一个：人名、公司名、行话&#10;回价：供应商回复的报价"></textarea>
+      <p id="glossary-error" class="field-error" role="alert" hidden></p>
+    </section>
     <!-- 把会议记录接给自己的智能体：一行一个。Claude Code、Codex 是开关；别的智能体复制一段话发给它，它自己接 -->
     <section id="agents" aria-labelledby="agents-label">
       <h2 id="agents-label">接给我的智能体</h2>

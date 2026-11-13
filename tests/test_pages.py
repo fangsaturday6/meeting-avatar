@@ -16,12 +16,14 @@ PANEL_IDS = ["panel", "tab-notes", "tab-settings", "alerts", "btn-meetings", "ta
              "say-text", "btn-send", "composer-error", "meetings", "reader", "reader-title", "reader-sub", "btn-reader-close",
              "btn-minutes", "btn-copy-path", "reader-body", "settings", "engagement", "set-topic", "set-role", "open-book-row",
              "set-open-book", "set-scene", "set-project", "set-projects-root", "projects-count", "set-name", "set-owner",
-             "set-voice", "set-speed", "set-skills", "mic-select", "speaker-select", "settings-error",
+             "set-voice", "set-speed", "set-skills", "mic-select", "speaker-select", "set-keep-audio", "settings-error",
+             "glossary", "glossary-count", "glossary-text", "btn-glossary-import", "glossary-file", "glossary-error",
              "agents", "agent-claude", "agent-codex", "btn-copy-agent-guide", "agents-error"]
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(demo.glossary, "GLOSSARY_FILE", tmp_path / "glossary.txt")
     monkeypatch.setattr(demo, "DESIGN_DIR", tmp_path)
     monkeypatch.setattr(demo, "PACE", 0.01)
     with TestClient(create_app(demo.DemoHub())) as c:
@@ -102,3 +104,13 @@ def test_every_connectable_agent_has_its_own_switch(client):
     assert set(re.findall(r'data-agent="([^"]+)"', html)) == set(connect.CLIENTS)
     assert [c["state"] for c in client.get("/api/agents").json()["clients"]] == ["off", "missing"]
     assert client.put("/api/agents/claude", json={"connected": True}).json()["clients"][0]["state"] == "on"
+
+
+def test_demo_glossary_can_be_edited_without_touching_the_real_one(client, tmp_path):
+    """演示后台自带几个常用词，改它、往里导入都只动临时目录里的那一份。"""
+    g = client.get("/api/glossary").json()
+    assert g["count"] == 5 and "回价：供应商回复的报价" in g["text"]
+    assert client.put("/api/glossary", json={"text": "陈默\n北辰"}).json() == {"text": "陈默\n北辰\n", "count": 2}
+    r = client.post("/api/glossary/import", json={"name": "客户.csv", "text": "名称,备注\n蓝湾,做 EDA 的\n北辰,\n"}).json()
+    assert r["added"] == 1 and r["count"] == 3
+    assert (tmp_path / "glossary.txt").read_text(encoding="utf-8") == "陈默\n北辰\n\n# 从 客户.csv 导入\n蓝湾：做 EDA 的\n"

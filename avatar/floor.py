@@ -258,8 +258,8 @@ class Floor:
         self._arm_nudge()
 
     async def on_utterance(self, text: str, embedding=None, speaker_name: str | None = None,
-                           seconds: float = 10.0) -> Line | None:
-        """有人说完了一句话。返回字幕行；被判为回声则返回 None。"""
+                           seconds: float = 10.0, at: float | None = None) -> Line | None:
+        """有人说完了一句话。返回字幕行；被判为回声则返回 None。at：这句话从录音的第几秒开始。"""
         text = fix_name(text.strip(), self.m.settings.name)
         if not self.m.active or not text:
             return None
@@ -277,7 +277,7 @@ class Floor:
             log.info("听到 [%s] %.1f秒｜%s｜声纹：%s", self.m.speakers.name_of(sid), seconds, text,
                      "、".join(f"{n} {v:.2f}" for n, v in scores) or ("第一位" if embedding is not None else "太短，沿用上一位"))
         self.m.emit("speaker", speaker=self.m.speakers.speakers[sid].to_dict())
-        line = self.m.add_line("human", text, sid, seconds if speaker_name is None else 0.0)
+        line = self.m.add_line("human", text, sid, seconds if speaker_name is None else 0.0, at=at)
         self._nudge_ok = True
         if is_backchannel(text) and self.m.settings.name not in text and self._resume(
                 f"（你说到一半时 [{line.speaker}] 附和了一声「{text}」，他在听，你已经把话接着说完：「" + "{said}」）"):

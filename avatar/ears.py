@@ -56,12 +56,17 @@ class Ears:
     lead_in = 0.2
     min_embed_seconds = 1.0  # 短于这个长度的片段声纹不可靠，不提取
     live_windows = 190       # 中途分辨说话人时最多看最近约 6 秒
+    # 断句和识别的参数。改它们之前先用 `python -m avatar.replay` 拿录下来的会比一比
+    vad_threshold = 0.5
+    min_speech = 0.25
+    max_speech = 20
+    threads = 4
 
     def __init__(
         self,
         on_speech_start: Callable[[], None],
         on_speech_end: Callable[[float], None],
-        on_utterance: Callable[..., Awaitable[object]],   # (text, embedding, seconds=…)
+        on_utterance: Callable[..., Awaitable[object]],   # (text, embedding, seconds=…, at=…)
     ):
         self.on_speech_start = on_speech_start
         self.on_speech_end = on_speech_end
@@ -75,6 +80,8 @@ class Ears:
         self._buf = np.zeros(0, dtype=np.float32)
         self._tape = Tape(SAMPLE_RATE * 24)   # 比最长的一段话（20 秒）再多留几秒
         self._speaking = False
+        self._fed = 0                         # 一共喂进来多少个采样（没给录音时钟时，用它定位）
+        self._base: int | None = None         # 断句重置后的第 0 个采样，在录音里是第几个
         self._live: list[np.ndarray] = []   # 当前这段人声到目前为止的采样（用来中途分辨是谁在说）
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ears")
         self._results: asyncio.Queue | None = None
@@ -86,10 +93,10 @@ class Ears:
 
         cfg = so.VadModelConfig()
         cfg.silero_vad.model = str((models.VAD if models.VAD.ready else models.VAD_OLD).path)
-        cfg.silero_vad.threshold = 0.5
+        cfg.silero_vad.threshold = self.vad_threshold
         cfg.silero_vad.min_silence_duration = self.min_silence
-        cfg.silero_vad.min_speech_duration = 0.25
-        cfg.silero_vad.max_speech_duration = 20
+        cfg.silero_vad.min_speech_duration = self.min_speech
+        cfg.silero_vad.max_speech_duration = self.max_speech
         cfg.sample_rate = SAMPLE_RATE
         self._window = cfg.silero_vad.window_size
         self._vad = so.VoiceActivityDetector(cfg, buffer_size_in_seconds=60)
@@ -97,7 +104,7 @@ class Ears:
             model=str(models.ASR.path), tokens=str(models.ASR_TOKENS.path),
             # 语言锁中文：让它自己猜的话，咳嗽、键盘声会被猜成日语、韩语、英语，记录里就多出「ち」「Yeah.」。
             # 锁了之后整句英文照样认得出来。
-            num_threads=4, use_itn=True, language="zh",
+            num_threads=self.threads, use_itn=True, language="zh",
         )
         if models.SPEAKER.ready:
             self._spk = so.SpeakerEmbeddingExtractor(
@@ -110,6 +117,7 @@ class Ears:
         """换一场会议或换了音频来源时清掉残留状态。"""
         self._buf = np.zeros(0, dtype=np.float32)
         self._tape.reset()
+        self._base = None                    # 断句从头数了：下一帧来时重新对上录音里的位置
         if self._vad is not None:
             self._vad.reset()
         if self._speaking:
@@ -117,13 +125,17 @@ class Ears:
             self.on_speech_end(0.0)
 
     # ---- 喂音频（事件循环里调用） ----
-    def feed(self, pcm16: bytes) -> None:
+    def feed(self, pcm16: bytes, clock: int | None = None) -> None:
+        """clock：这一帧第一个采样在整场录音里是第几个。给了它，每句话才能对回录音。"""
         if not self.ready:
             return
         if self._results is None:
             self._results = asyncio.Queue()
             self._consumer = asyncio.create_task(self._consume())
         samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
+        if self._base is None:
+            self._base = self._fed if clock is None else clock
+        self._fed += len(samples)
         self._buf = np.concatenate([self._buf, samples])
         w = self._window
         while len(self._buf) >= w:
@@ -144,24 +156,44 @@ class Ears:
             elif not speaking and self._speaking:
                 self._speaking = False
                 self.on_speech_end(self.min_silence)
-            while not self._vad.empty():
-                seg = np.array(self._vad.front.samples, dtype=np.float32)
-                lead = self._tape.before(self._vad.front.start, int(self.lead_in * SAMPLE_RATE))
-                self._vad.pop()
-                loop = asyncio.get_running_loop()
-                self._results.put_nowait(loop.run_in_executor(self._pool, self._recognize, seg, lead))
+            self._take()
+
+    def _take(self) -> None:
+        """把断句已经切好的片段交去识别。"""
+        while not self._vad.empty():
+            seg = np.array(self._vad.front.samples, dtype=np.float32)
+            start = self._vad.front.start
+            lead = self._tape.before(start, int(self.lead_in * SAMPLE_RATE))
+            self._vad.pop()
+            at = round(((self._base or 0) + start) / SAMPLE_RATE, 3)
+            fut = asyncio.get_running_loop().run_in_executor(self._pool, self._recognize, seg, lead)
+            self._results.put_nowait((fut, at))
+
+    def flush(self) -> None:
+        """声音到头了（重放结束）：说到一半的那句也交出去。"""
+        if self._vad is None or self._results is None:
+            return
+        self._vad.flush()
+        self._take()
+
+    async def drain(self) -> None:
+        """等已经交出去的片段都识别完、回调完。"""
+        if self._results is not None:
+            await self._results.join()
 
     async def _consume(self) -> None:
         while True:
-            fut = await self._results.get()
+            fut, at = await self._results.get()
             try:
                 text, emb, seconds = await fut
                 if text:
-                    await self.on_utterance(text, emb, seconds=seconds)
+                    await self.on_utterance(text, emb, seconds=seconds, at=at)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
                 log.exception("这段话没识别出来")
+            finally:
+                self._results.task_done()
 
     # ---- 识别（线程池里） ----
     def _recognize(self, samples: np.ndarray, lead: np.ndarray) -> tuple[str, np.ndarray | None, float]:

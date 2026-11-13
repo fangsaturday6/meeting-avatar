@@ -324,6 +324,7 @@ dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pypinyin" },
+    { name = "pyyaml" },
     { name = "sherpa-onnx" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -341,6 +342,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pypinyin", specifier = ">=0.50" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "sherpa-onnx", specifier = ">=1.10.30" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]

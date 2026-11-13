@@ -24,6 +24,8 @@ SCENES = {"room": "当面开会", "online": "线上会议"}
 ROLES = {"companion": "陪我开会", "delegate": "替我开会"}
 # 参与度：只在被叫到时说 / 有实质补充才说 / 每个议题都主动给看法
 ENGAGEMENTS = {"quiet": "少说", "normal": "适中", "active": "多说"}
+# 每场会的原始录音留多久。留着才能会后重算说话人、拿真实的会比较识别参数
+KEEP_AUDIO = {"always": "一直留着", "until_polished": "整理完就删", "never": "不留"}
 
 
 @dataclass
@@ -47,6 +49,7 @@ class Settings:
     hold: float = 4.0            # 被问到后，旁边一直有别的声音时最多等多久就顶着说
     barge_delay: float = 0.9     # 别人持续说多久算打断。太短的话一声「嗯」就会把它打断
     barge_grace: float = 0.5     # 刚开口的这段时间内不算打断（防回声误触发）
+    keep_audio: str = "always"   # 录音留多久，见 KEEP_AUDIO。文字和声纹总是留着
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -77,6 +80,8 @@ class Settings:
                 raise ValueError("这个目录不存在")
             if f.name == "role" and new not in ROLES:
                 raise ValueError("没有这种角色")
+            if f.name == "keep_audio" and new not in KEEP_AUDIO:
+                raise ValueError("录音只能：" + "、".join(KEEP_AUDIO.values()))
             if f.name == "engagement" and new not in ENGAGEMENTS:
                 raise ValueError("参与度只能是：" + "、".join(ENGAGEMENTS))
             if f.name == "name" and not new.strip():

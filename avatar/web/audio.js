@@ -3,6 +3,7 @@
 
 const MIC_STALL = 1500;      // 麦克风正常每 40 毫秒来一包声音；这么久没有新的，就当它断了
 const GONE = ['NotFoundError', 'OverconstrainedError'];
+const FRAME_MAGIC = new TextEncoder().encode('PCM1');
 
 // onMic(error)：麦克风自己断过之后重新接的结果，接上了是 null
 export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onMic = () => {} }) {
@@ -10,6 +11,7 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onM
   let want = { scene: 'room', micId: '', speakerId: '' };     // 上一次要接的场合和设备
   let micStream = null, micCtx = null, micJob = Promise.resolve();
   let micAt = 0, micBusy = 0, micFallback = false, micWatch = 0, lastCheck = 0;
+  let seq = 0;                 // 每采到一包加一，发不出去的也占号：后台看到跳号就知道中间丢了声音
   let outCtx = null, analyser = null, outEl = null;
   let queue = [], current = null, generation = 0, decodeChain = Promise.resolve();
   let raf = 0;
@@ -47,6 +49,15 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onM
   }
 
   function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+  // 声音帧：「PCM1」+ 4 字节小端序号 + 16k 单声道 16 位 PCM（格式见 README）
+  function frame(n, pcm) {
+    const out = new Uint8Array(8 + pcm.byteLength);
+    out.set(FRAME_MAGIC, 0);
+    new DataView(out.buffer).setUint32(4, n >>> 0, true);
+    out.set(new Uint8Array(pcm), 8);
+    return out.buffer;
+  }
 
   function enqueue(head, bytes) {
     const gen = generation;
@@ -131,7 +142,8 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onM
     const node = new AudioWorkletNode(ctx, 'pcm');
     node.port.onmessage = (e) => {
       micAt = performance.now();
-      if (ws && ws.readyState === 1) ws.send(e.data.pcm);
+      const n = seq++;
+      if (ws && ws.readyState === 1) ws.send(frame(n, e.data.pcm));
       onMicLevel(Math.min(1, e.data.level * 3));
     };
     const mute = ctx.createGain();
@@ -240,6 +252,7 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onM
       stopPlayback();
       stopMic();
       onMicLevel(0);
+      outCtx?.suspend().catch(() => {});    // 开着的音频输出会让电脑一直不休眠；下次开会 setupOutput 会恢复
       if (ws) { ws.onclose = null; ws.close(); ws = null; }
       onLink('idle');
     },

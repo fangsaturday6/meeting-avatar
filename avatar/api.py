@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import struct
 import time
 from contextlib import asynccontextmanager
@@ -16,14 +17,16 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import connect, knowledge, mcp_server, models
+from . import connect, glossary, knowledge, mcp_server, models
 from .archive import NO_CONTENT, Archive, dialogue_of, split_minutes
-from .config import DESIGN_DIR, ENGAGEMENTS, ROLES, SCENES, VOICES, Settings
+from .audio_in import AudioIn
+from .config import DESIGN_DIR, ENGAGEMENTS, KEEP_AUDIO, ROLES, SCENES, VOICES, Settings
 from .ears import Ears
 from .fast_brain import FastBrain
 from .floor import Floor
 from .meeting import Meeting
 from .mouth import Mouth
+from .recorder import AudioStore
 from .slow_brain import SlowBrain
 from .textutil import TASK_KINDS
 
@@ -106,7 +109,8 @@ class Hub:
     """把所有部件装到一起。测试时可以换成假部件。"""
 
     def __init__(self, settings: Settings | None = None, brain=None, mouth=None, worker=None,
-                 save_settings: bool = True, archive: Archive | None = None, agents=None):
+                 save_settings: bool = True, archive: Archive | None = None, agents=None,
+                 audio_store: AudioStore | None = None):
         self.settings = settings or Settings.load()
         self.save_settings = save_settings
         self.archive = archive or Archive()
@@ -123,9 +127,28 @@ class Hub:
         self.polishing: dict[str, asyncio.Task] = {}    # 纪要已经有了、整理稿还在写的会议
         self._bg: set[asyncio.Task] = set()
         self._projects: list[knowledge.Project] = []    # 它认识的项目（扫盘要一两秒，只在后台线程里刷新）
-        self.ears = Ears(self.floor.on_speech_start, self.floor.on_speech_end, self.floor.on_utterance)
+        self.ears = Ears(self.floor.on_speech_start, self.floor.on_speech_end, self._heard)
         self.floor.voice_probe = self.ears.who
+        self.audio_store = audio_store or AudioStore()
+        self.audio = AudioIn(self.meeting, self.ears, self.audio_store)    # 形象页送来的声音都从这里进
         self.ready = {"ears": False, "speakers": False, "local_voice": False}
+
+    async def _heard(self, text: str, embedding=None, seconds: float = 10.0, at: float | None = None):
+        """耳朵认出一句话：交给接话逻辑，再把识别结果连同声纹记进这场会的录音目录。"""
+        line = await self.floor.on_utterance(text, embedding, seconds=seconds, at=at)
+        if self.meeting.active:
+            self.audio.heard(text, embedding, seconds, at, line)
+        return line
+
+    def end_meeting_audio(self) -> None:
+        """会开完了：录音收尾。"""
+        self.audio.finish()
+
+    def _after_minutes(self, meeting_id: str, written: bool) -> None:
+        """「整理完就删」：整理稿写进记录了（或者这场会没什么可整理的），录音就不留了。"""
+        if written and self.settings.keep_audio == "until_polished" and meeting_id != self.audio._rec_id:
+            self.audio_store.drop_audio(meeting_id)
+            log.info("整理完了，按设置删掉这场会的录音：%s", meeting_id)
 
     def _recap(self) -> str:
         return "\n".join(f"[{l.speaker}] {l.text}" for l in self.meeting.lines[-60:] if l.who != "note")
@@ -246,6 +269,8 @@ class Hub:
                 title, summary = split_minutes(res.text)
                 state = "done" if summary else "empty"
                 self._store_minutes(meeting_id, title, summary)
+                if not summary or not draft:
+                    self._after_minutes(meeting_id, True)      # 没有整理稿可等了
                 if draft and summary:      # 没有纪要（整场都是杂音）就不要整理稿了
                     self.polishing[meeting_id] = asyncio.create_task(self._polished(meeting_id, title, summary, draft))
                     draft = None
@@ -269,6 +294,7 @@ class Hub:
             if polished := await draft:
                 self._store_minutes(meeting_id, title, summary, polished)
                 self.meeting.emit("meetings", meetings=self.archive.recent())    # 开着这场会的阅读页会重新读一遍
+                self._after_minutes(meeting_id, True)
         except asyncio.CancelledError:
             draft.cancel()
             raise
@@ -280,6 +306,8 @@ class Hub:
 
     async def load(self) -> None:
         """加载本地模型。缺模型不报错，只是少一项能力。"""
+        if n := await asyncio.to_thread(self.audio_store.seal_all):
+            log.info("上次没正常收尾的录音补封了 %d 块", n)
         try:
             if not models.missing(include_optional=False):
                 await asyncio.to_thread(self.ears.load)
@@ -313,16 +341,42 @@ class Hub:
                 await asyncio.wait({task})
         self.meeting.emit("ready", ready=self.ready)
 
+    # ---------- 常用词 ----------
+    @staticmethod
+    def glossary_state() -> dict:
+        """词表原文和里面有几个词。要读盘，在线程里调。"""
+        text = glossary.read()
+        return {"text": text, "count": len(glossary.parse(text))}
+
+    async def glossary_changed(self) -> dict:
+        """词表变了：告诉开着的窗口，返回新的词表。"""
+        state = await asyncio.to_thread(self.glossary_state)
+        self.meeting.emit("glossary", **state)
+        return state
+
+    async def remember_name(self, name: str) -> None:
+        """主人亲手给说话人写的名字是对的写法，记进词表；会后整理时别人嘴里的同音字就能对上。
+        声音里自己报的名字不走这里——那是识别出来的，字不一定对。"""
+        if re.fullmatch(r"说话人\d+", name):
+            return
+        try:
+            if await asyncio.to_thread(glossary.add, {name: ""}, "会上的人"):
+                await self.glossary_changed()
+        except OSError:
+            log.exception("名字没记进常用词表")
+
     def state(self) -> dict:
         return {**self.meeting.snapshot(), "ready": self.ready, "meetings": self.archive.recent(),
                 "minuting": list(self.minuting), "projects": self.projects_state(),
                 "voices": VOICES, "scenes": SCENES, "roles": ROLES, "engagements": ENGAGEMENTS,
+                "keep_audio_options": KEEP_AUDIO,
                 "task_kinds": list(TASK_KINDS)}
 
     async def close(self) -> None:
         for t in [*self.minuting.values(), *self.polishing.values(), *self._bg]:
             t.cancel()
         await self.floor.stop()
+        self.end_meeting_audio()
         self.meeting.save()
         self.ears.close()
         if hasattr(self.mouth, "close"):
@@ -401,6 +455,15 @@ class AgentIn(BaseModel):
     connected: bool
 
 
+class GlossaryIn(BaseModel):
+    text: str = Field(max_length=glossary.TEXT_LIMIT)
+
+
+class GlossaryImportIn(BaseModel):
+    text: str = Field(min_length=1, max_length=glossary.IMPORT_LIMIT)
+    name: str = Field(default="", max_length=200)
+
+
 def create_app(hub: Hub | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -453,6 +516,7 @@ def create_app(hub: Hub | None = None) -> FastAPI:
         hub = h()
         was_active = hub.meeting.active
         await hub.floor.stop()
+        hub.end_meeting_audio()
         # 说得够多才值得整理纪要；三两句的测试不整理（想要可以手动点）
         if was_active and sum(l.who == "human" for l in hub.meeting.lines) >= MINUTES_MIN_LINES:
             hub.make_minutes(hub.meeting.record_id)
@@ -518,6 +582,30 @@ def create_app(hub: Hub | None = None) -> FastAPI:
         hub.meeting.emit("agents", clients=clients)
         return {"clients": clients}
 
+    # ---------- 常用词 ----------
+    @app.get("/api/glossary")
+    async def get_glossary():
+        """常用词表：`text` 是原文（一行一个词，后面可以跟「：说明」，# 开头是注释），`count` 是里面有几个词。"""
+        return await asyncio.to_thread(h().glossary_state)
+
+    @app.put("/api/glossary")
+    async def put_glossary(body: GlossaryIn):
+        """把整张词表换成 `text`。下一次整理纪要和整理稿就用新的。"""
+        await asyncio.to_thread(glossary.save, body.text)
+        return await h().glossary_changed()
+
+    @app.post("/api/glossary/import")
+    async def import_glossary(body: GlossaryImportIn):
+        """把一份名单并进词表：只追加还没有的词，已有的行不动。`name` 是文件名，按后缀认格式
+        （.csv / .tsv 表格、.yaml 公司本体，其余当一行一个）。`added` 是新加了几个。"""
+        name = Path(body.name.replace("\\", "/")).name
+        try:
+            terms = await asyncio.to_thread(glossary.from_file, name, body.text)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        added = await asyncio.to_thread(glossary.add, terms, f"从 {name} 导入" if name else "导入")
+        return {**await h().glossary_changed(), "added": len(added)}
+
     @app.post("/mcp", include_in_schema=False)
     async def mcp(request: Request):
         """HTTP 方式的 MCP：和 mcp_server.py 是同一套只读工具，给不方便拉起本地命令的智能体用。"""
@@ -569,7 +657,9 @@ def create_app(hub: Hub | None = None) -> FastAPI:
     async def rename_speaker(speaker_id: int, body: RenameIn):
         if speaker_id not in h().meeting.speakers.speakers:
             raise HTTPException(404, "没有这位说话人")
-        return h().meeting.rename_speaker(speaker_id, body.name)
+        speaker = h().meeting.rename_speaker(speaker_id, body.name)
+        await h().remember_name(speaker["name"])
+        return speaker
 
     @app.post("/api/tasks")
     async def create_task(body: TaskIn):
@@ -631,7 +721,7 @@ def create_app(hub: Hub | None = None) -> FastAPI:
                 if msg.get("bytes") is not None:
                     mic.heard()
                     if hub.meeting.active:
-                        hub.ears.feed(msg["bytes"])
+                        hub.audio.feed(msg["bytes"])
                 elif msg.get("text"):
                     try:
                         ev = json.loads(msg["text"])

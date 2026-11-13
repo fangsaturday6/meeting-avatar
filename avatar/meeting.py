@@ -30,6 +30,7 @@ class Line:
     speaker: str = ""
     cut: bool = False        # 数字人这句话被打断了
     seconds: float = 0.0     # 这句话说了多久（听来的才有；打字的、数字人说的是 0）
+    at: float | None = None  # 这句话从录音的第几秒开始（听来的才有），对得回 workspace/audio/<会议编号>/ 里的声音
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -72,6 +73,7 @@ class Meeting:
         self.brain_ok = True
         self.stage_online = False               # 有窗口接通了声音（负责收音和播放）
         self.mic_online = False                 # 那个窗口的麦克风声音确实在送过来（耳机断开时会停）
+        self.mic_health = "ok"                  # ok | silent（送来的一直是数字静音：麦克风被关了、没权限）
         self.humans_speaking = False
         self.started_at = 0.0
         self.board_task_id: int | None = None   # 资料板当前展示哪个任务
@@ -168,11 +170,12 @@ class Meeting:
             self.emit("flag", name=name, value=value)
 
     # ---- 字幕 ----
-    def add_line(self, who: str, text: str, speaker_id: int | None = None, seconds: float = 0.0) -> Line:
+    def add_line(self, who: str, text: str, speaker_id: int | None = None, seconds: float = 0.0,
+                 at: float | None = None) -> Line:
         self._line_id += 1
         name = self.settings.name if who == "bot" else (self.speakers.name_of(speaker_id) if who == "human" else "")
         line = Line(id=self._line_id, t=time.time(), who=who, text=text, speaker_id=speaker_id, speaker=name,
-                    seconds=seconds)
+                    seconds=seconds, at=at)
         self.lines.append(line)
         self.emit("line", line=line.to_dict())
         self._save_soon()
@@ -235,6 +238,7 @@ class Meeting:
             "brain_ok": self.brain_ok,
             "stage_online": self.stage_online,
             "mic_online": self.mic_online,
+            "mic_health": self.mic_health,
             "humans_speaking": self.humans_speaking,
             "started_at": self.started_at,
             "record_id": self.record_id,

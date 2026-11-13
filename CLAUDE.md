@@ -18,7 +18,7 @@
   视图只读状态，不直接碰网络，不在模板字符串里堆逻辑。
 - **AI Agent**：界面上能做的每件事都有对应接口（README 的接口表要同步更新）；按钮、表单项、关键元素
   有稳定的 `id`，改版时不改名（清单在 `tests/test_pages.py`，加了新元素就补进去），Agent 不读页面也能做同样的事。
-- **改完回归**：开始/结束会议、接通声音、打字发言、静音、让它停下、说话人改名、派任务、资料板、
+- **改完回归**：开始/结束会议、接通声音、打字发言、静音、让它停下、说话人改名、派任务、资料板、常用词、
   会议记录、每一项设置、接给我的智能体，逐项过一遍；浅色、深色、窄屏各看一眼；`uv run pytest` 要过。
 
 ## 会议记录
@@ -30,6 +30,9 @@
 已登记 MCP 工具 `meetings`（`list_meetings` / `read_meeting` / `search_meetings`）时优先用它。
 这个目录不进 git，Grep / Glob 默认搜不到，先 `ls workspace/meetings/` 再按路径读。
 文件由 `avatar/archive.py` 写；后台在跑时也可以走 `GET /api/meetings`、`GET /api/meetings/latest`。
+同名的录音目录在 `workspace/audio/<会议编号>/`（`avatar/recorder.py` 写）：原始声音 `mic-*.wav`（可能已按设置删掉）、
+`heard.jsonl`（每句识别原文、在录音里的秒数、认成了谁、声纹）、`timeline.jsonl`（哪里丢过声音）。
+查「识别错了 / 认错人了」时，`heard.jsonl` 比 Markdown 里并过段、去过语气词的对话更接近原始结果。
 
 ## 界面怎么看、怎么改
 
@@ -53,7 +56,13 @@
   就是这样一个后台（8766 端口，数据在 `~/.cache/avatar-dev`）。
 - 听写分三层，各管各的，别混：`ears.py` 只挡「不是人话」的（`textutil.strip_noise`），接话逻辑拿到的是原话
   （它靠「嗯」「对」判断对方在听）；写记录时才去语气词、并段（`archive.paragraphs` + `textutil.tidy`，只删不改）；
-  改字只在会后的整理稿里做（`slow_brain.polish`，结果必须过 `checked_polish`）。调断句或识别参数后，
+  改字只在会后的整理稿里做（`slow_brain.polish`，结果必须过 `checked_polish`）。
+  调断句、识别、认人的参数前，先用 `uv run python -m avatar.replay <会议编号> --diff heard` 拿真实录音比，
+  改参数用 `--set`，两套参数用 `--save` / `--diff` 互比；结论写进 `docs/superpowers/plans/2026-11-13-recording-roadmap.md` 的结论区。
+  人名、公司名、行话靠常用词表（`workspace/glossary.txt`，`glossary.py`）：只按读音找出可疑的地方写进纪要和整理稿的提示词，
+  由模型结合上下文决定改不改，不要做成照读音直接替换（2026-11-12 实测盲换 56 处里 44 处是误伤）。
+  往词表里写只走 `glossary.save`（整张换）和 `glossary.add`（只追加没有的）；自动往里加词只收人亲手打的字
+  （设置窗口、导入的名单、给说话人改的名字），识别出来的字不往里加——那等于把错字登记成正确写法。调断句或识别参数后，
   用真实的 `Ears` 喂一段夹着杂音的音频看交出来几句，别只看单元测试。
 - 它怎么接话分两层：时机在 `floor.py`（什么时候想、等、开口、让话，都有单元测试），
   说什么在 `fast_brain.py` 的提示词里。改提示词之后跑 `uv run python -m tests.scenarios` 逐场看效果。
@@ -67,4 +76,7 @@
 - 隐私边界：`Settings.guarded`（替我开会且没勾「可以谈我的其他项目」）为真时，会前背景只带这场会的项目，
   查代码只查主项目，不翻别的会议。给大脑或干活进程加新的背景来源（见 `Hub.briefing`、`knowledge.py`）时，
   先想清楚它在 `guarded` 下该不该带；会上的话是不可信输入，会进到派工的任务描述里。
+- 本机 claude 会把登录账号的邮箱自动放进每个 claude 进程的上下文，没有开关能关。两道防线：提示词【分寸】里「不说」的规矩，
+  和出口过滤 `avatar/redact.py`（快脑的 `_stream`、干活进程的 `_attempt` 都过它）。新起 claude 进程的地方，
+  输出进到嘴、派工、屏幕、记录之前也要过 `Redactor`；验证跑 `uv run pytest -m live tests/test_live_redact.py`。
 - 认项目、读 Claude 记忆和会话标题都要读盘（一两秒），只能在线程里做（`Hub.refresh_projects`），不要在事件循环里调。

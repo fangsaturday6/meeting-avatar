@@ -9,7 +9,8 @@ const state = emptyState();
 // view：记录页现在显示哪个视图。null = 跟着会议走（开着会看这场会，没开会看以前的会议）
 const ui = { view: null, renaming: null, settingsKey: '', engageKey: '', error: '', readerKey: '',
   reader: { id: null, text: '', error: '', copied: false },
-  agents: { busy: '', error: '', copied: false } };     // busy：正在接上或取消的那个智能体
+  agents: { busy: '', error: '', copied: false },       // busy：正在接上或取消的那个智能体
+  glossary: { busy: false, error: '', note: '' } };     // note：刚导入完，按钮上短暂显示加了几个
 const store = {
   get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
   set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* 存不了就算了 */ } },
@@ -224,17 +225,21 @@ function closeReader() {
 }
 
 // ---------- 设置 ----------
+const options = (map) => Object.entries(map || {}).map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join('');
+
 function renderSettings() {
   const s = state.settings;
-  const key = JSON.stringify([s, state.voices, state.scenes, state.roles, state.projects]);
+  const key = JSON.stringify([s, state.voices, state.scenes, state.roles, state.projects, state.keep_audio_options]);
   if (key === ui.settingsKey) return;      // 没变就不动表单，避免打字时被改写
   ui.settingsKey = key;
   const focused = document.activeElement;
   const set = (id, v) => { const el = $(id); if (el !== focused) el.value = v ?? ''; };
-  $('set-voice').innerHTML = Object.entries(state.voices).map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join('');
+  $('set-voice').innerHTML = options(state.voices);
+  $('set-keep-audio').innerHTML = options(state.keep_audio_options);
   $('set-scene').innerHTML = choices('set-scene', state.scenes, s.scene);
   $('set-role').innerHTML = choices('set-role', state.roles, s.role);
   set('set-name', s.name); set('set-owner', s.owner); set('set-voice', s.voice); set('set-speed', s.speed);
+  set('set-keep-audio', s.keep_audio);
   set('set-project', s.project_dir); set('set-projects-root', s.projects_root); set('set-topic', s.topic);
   $('set-skills').checked = !!s.use_my_skills;
   // 替我开会时默认只谈这场会的项目；要不要放开由主人自己定
@@ -329,6 +334,62 @@ async function copyAgentGuide() {
   if (ui.agents.copied) setTimeout(() => { ui.agents.copied = false; renderAgents(); }, 2400);
 }
 
+// ---------- 常用词 ----------
+// 词表就是一段文字：一行一个词。正在打字时不动输入框，免得别处的改动把字冲掉
+function renderGlossary() {
+  const g = state.glossary, box = $('glossary-text'), btn = $('btn-glossary-import'), u = ui.glossary;
+  $('glossary-count').textContent = g && g.count ? `${g.count} 个` : '';
+  box.disabled = !g;
+  if (g && document.activeElement !== box && box.value !== g.text) box.value = g.text;
+  btn.disabled = !g || u.busy;
+  btn.textContent = u.busy ? '正在导入…' : u.note || '导入文件';
+  btn.classList.toggle('done', !!u.note);
+  $('glossary-error').hidden = !u.error;
+  $('glossary-error').textContent = u.error;
+}
+
+async function loadGlossary() {
+  const r = await api.glossary();
+  if (r.ok) state.glossary = r.data;
+  ui.glossary.error = r.ok ? '' : r.message;
+  renderGlossary();
+}
+
+async function saveGlossary() {
+  const box = $('glossary-text');
+  if (!state.glossary || box.value === state.glossary.text) return;
+  const r = await api.saveGlossary(box.value);
+  if (r.ok) state.glossary = r.data;
+  ui.glossary.error = r.ok ? '' : r.message;
+  renderGlossary();
+}
+
+// 别人的名单多半是表格软件导出的，不一定是 UTF-8：读不成就按国标码再读一遍
+async function readText(file) {
+  const bytes = await file.arrayBuffer();
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { return new TextDecoder('gb18030').decode(bytes); }
+}
+
+async function importGlossary(files) {
+  const u = ui.glossary;
+  u.busy = true; u.error = ''; u.note = '';
+  renderGlossary();
+  await saveGlossary();                       // 输入框里还没存的改动先存下，导入是往后追加
+  let added = 0;
+  for (const file of files) {
+    const r = file.size > 2_000_000 ? { ok: false, message: '太大了，拆小一点再导入' }
+      : await api.importGlossary(file.name, await readText(file));
+    if (!r.ok) { u.error = `${file.name}：${r.message}`; break; }
+    added += r.data.added;
+    state.glossary = { text: r.data.text, count: r.data.count };
+  }
+  u.busy = false;
+  u.note = u.error ? '' : added ? `加了 ${added} 个` : '没有新词';
+  renderGlossary();
+  if (added) $('glossary-text').scrollTop = $('glossary-text').scrollHeight;     // 新词加在最后，滚过去让人看见
+  if (u.note) setTimeout(() => { u.note = ''; renderGlossary(); }, 2400);
+}
+
 // 麦克风和扬声器存在本机；主窗口监听到变化后立刻换设备
 async function renderDevices() {
   const { mics, speakers } = await listDevices().catch(() => ({ mics: [], speakers: [] }));
@@ -354,6 +415,7 @@ function render(part) {
   if (part === 'all' || part === 'status' || part === 'meetings') renderMeetings();
   if (part === 'all' || part === 'settings') renderSettings();
   if (part === 'all' || part === 'agents') renderAgents();
+  if (part === 'all' || part === 'glossary') renderGlossary();
 }
 
 // 统一执行一个操作：失败时把原因用人话显示在顶部
@@ -426,9 +488,17 @@ $('agents').addEventListener('click', (e) => {
   if (li) toggleAgent(li.dataset.agent);
 });
 $('btn-copy-agent-guide').addEventListener('click', copyAgentGuide);
+$('glossary-text').addEventListener('change', saveGlossary);
+$('btn-glossary-import').addEventListener('click', () => $('glossary-file').click());
+$('glossary-file').addEventListener('change', (e) => {
+  const files = [...e.target.files];
+  e.target.value = '';                        // 同一个文件改完可以再导一次
+  if (files.length) importGlossary(files);
+});
 navigator.mediaDevices?.addEventListener?.('devicechange', renderDevices);
 
 connectEvents(state, render);
 render('all');
 renderDevices();
 loadAgents();
+loadGlossary();

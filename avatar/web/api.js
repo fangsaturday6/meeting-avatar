@@ -46,6 +46,9 @@ export const api = {
   figures: () => call('GET', '/api/figures'),
   agents: () => call('GET', '/api/agents'),
   connectAgent: (id, connected) => call('PUT', `/api/agents/${encodeURIComponent(id)}`, { connected }),
+  glossary: () => call('GET', '/api/glossary'),
+  saveGlossary: (text) => call('PUT', '/api/glossary', { text }),
+  importGlossary: (name, text) => call('POST', '/api/glossary/import', { name, text }),
 };
 
 function upsert(list, item) {
@@ -71,6 +74,7 @@ export function reduce(state, ev) {
     case 'meetings': state.meetings = ev.meetings; return 'meetings';
     case 'projects': state.projects = ev.projects; return 'settings';
     case 'agents': if (state.agents) state.agents.clients = ev.clients; return 'agents';
+    case 'glossary': state.glossary = { text: ev.text, count: ev.count }; return 'glossary';
     case 'minutes':     // 一场会的纪要开始整理 / 整理完了
       state.minuting = state.minuting.filter((id) => id !== ev.id);
       if (ev.state === 'running') state.minuting.push(ev.id);
@@ -84,11 +88,13 @@ export function emptyState() {
   return {
     status: 'off', muted: false, brain_ok: true, stage_online: false, humans_speaking: false,
     mic_online: true,   // 接通声音的窗口有没有把麦克风的声音送到后台；后台没报之前先当它有
+    mic_health: 'ok',   // silent = 送来的一直是数字静音（麦克风被关了、没权限）
     settings: {}, speakers: [], lines: [], tasks: [], board_task_id: null,
     meetings: [], record_id: '', minuting: [], minutes_result: null, projects: { root: '', names: [] },
     agents: null,      // 会议记录接给了哪些智能体。要去问本机的 Claude Code / Codex，慢，所以不在全量状态里，由设置窗口单独取
+    glossary: null,    // 常用词表（原文和词数）。可能有几百行，也不在全量状态里，由设置窗口单独取
     ready: { ears: false, speakers: false, local_voice: false },
-    voices: {}, scenes: {}, roles: {}, engagements: {}, task_kinds: [],
+    voices: {}, scenes: {}, roles: {}, engagements: {}, keep_audio_options: {}, task_kinds: [],
     connected: false,
   };
 }

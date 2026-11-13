@@ -9,16 +9,19 @@ from starlette.testclient import TestClient
 from avatar.api import Hub, create_app
 from avatar.archive import Archive
 from avatar.config import Settings
+from avatar.recorder import AudioStore
 from tests.fakes import FakeBrain, FakeMouth, FakeWorker
 
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
-    from avatar import models
+    from avatar import glossary, models
+    monkeypatch.setattr(glossary, "GLOSSARY_FILE", tmp_path / "glossary.txt")
     monkeypatch.setattr(models, "missing", lambda include_optional=True: [models.ASR])  # 测试里不加载模型
     s = Settings(); s.gap = 0.02; s.silence_nudge = 0.0
     hub = Hub(settings=s, brain=FakeBrain(["先做登录吧。", "[静]"]), mouth=FakeMouth(),
-              worker=FakeWorker(), save_settings=False, archive=Archive(tmp_path))
+              worker=FakeWorker(), save_settings=False, archive=Archive(tmp_path),
+              audio_store=AudioStore(tmp_path / "audio"))
     hub.meeting.save_delay = 0.01
     with TestClient(create_app(hub)) as c:
         c.hub = hub
@@ -462,3 +465,109 @@ def test_http_mcp_sees_the_meeting_in_progress(client):
                                   "params": {"name": "read_meeting", "arguments": {"part": "dialogue"}}}).json()
     assert "供应商接口这周能上线吗" in r["result"]["content"][0]["text"]
     client.post("/api/meeting/stop")
+
+
+# ---------- 常用词 ----------
+def test_glossary_can_be_read_replaced_and_imported_into(client, tmp_path):
+    assert client.get("/api/glossary").json() == {"text": "", "count": 0}       # 还没有词表
+    with client.websocket_connect("/ws/events") as ws:
+        ws.receive_json()
+        r = client.put("/api/glossary", json={"text": "# 人\n陈默\n北辰：合作方"})
+        assert r.json() == {"text": "# 人\n陈默\n北辰：合作方\n", "count": 2}
+        assert ws.receive_json() == {"type": "glossary", "text": "# 人\n陈默\n北辰：合作方\n", "count": 2}   # 开着的窗口跟着变
+    assert client.get("/api/glossary").json()["count"] == 2
+
+    # 导入只追加没有的；文件名只取最后一段，按后缀认格式
+    r = client.post("/api/glossary/import", json={"name": "C:\\名单\\通讯录.csv", "text": "工号,姓名\n1,陈默\n2,周航\n"}).json()
+    assert r["added"] == 1 and r["count"] == 3 and r["text"].endswith("\n\n# 从 通讯录.csv 导入\n周航\n")
+    assert client.post("/api/glossary/import", json={"text": "周航\n蓝湾"}).json()["added"] == 1
+    assert (tmp_path / "glossary.txt").read_text(encoding="utf-8").endswith("# 导入\n蓝湾\n")
+
+    r = client.post("/api/glossary/import", json={"name": "坏的.yaml", "text": "a: [1, 2\n"})      # 读不懂的说人话
+    assert r.status_code == 400 and r.json()["detail"] == "这个文件读不懂"
+    assert client.post("/api/glossary/import", json={"name": "空的.txt", "text": ""}).status_code == 422
+    assert client.put("/api/glossary", json={}).status_code == 422
+    assert client.put("/api/glossary", json={"text": ""}).json() == {"text": "", "count": 0}       # 清空
+
+
+def test_a_name_typed_for_a_speaker_goes_into_the_glossary(client, tmp_path):
+    client.post("/api/meeting/start")
+    client.post("/api/utterance", json={"speaker": "说话人1", "text": "先看一下报价"})
+    with client.websocket_connect("/ws/events") as ws:
+        ws.receive_json()
+        assert client.patch("/api/speakers/1", json={"name": "陈默"}).json()["name"] == "陈默"
+        seen = [ws.receive_json() for _ in range(2)]
+    assert {"type": "glossary", "text": "# 会上的人\n陈默\n", "count": 1} in seen
+    client.patch("/api/speakers/1", json={"name": "陈默"})             # 已经有了就不再加
+    client.patch("/api/speakers/1", json={"name": "说话人3"})          # 占位的名字不算
+    client.patch("/api/speakers/1", json={"name": "周航"})
+    assert (tmp_path / "glossary.txt").read_text(encoding="utf-8") == "# 会上的人\n陈默\n周航\n"
+
+
+# ---------- 录音 ----------
+def frames(n: int, start: int = 0, loud: int = 600) -> list[bytes]:
+    body = struct.pack("<640h", *([loud] * 640))
+    return [b"PCM1" + struct.pack("<I", start + i) + body for i in range(n)]
+
+
+def test_the_sound_of_a_meeting_is_kept_and_each_line_knows_its_place(client):
+    import functools
+    import wave
+    import numpy as np
+    hub = client.hub
+    client.post("/api/meeting/start")
+    rid = client.get("/api/state").json()["record_id"]
+    with client.websocket_connect("/ws/audio") as stage:
+        for f in frames(30):
+            stage.send_bytes(f)
+        wait_for(client, lambda s: s["mic_online"])
+        deadline = time.time() + 3
+        while hub.audio.samples < 30 * 640 and time.time() < deadline:
+            time.sleep(0.01)
+        line = client.portal.call(functools.partial(
+            hub._heard, "第一点先做登录", np.ones(4, dtype=np.float32), seconds=1.6, at=0.4))
+    assert line.at == 0.4 and line.text == "第一点先做登录"
+    client.post("/api/meeting/stop")
+    st = client.get("/api/state").json()
+    assert st["lines"][0]["at"] == 0.4 and st["mic_health"] == "ok"
+    store = hub.audio_store
+    with wave.open(str(store.folder(rid) / "mic-0000.wav")) as w:
+        assert w.getnframes() == 30 * 640
+    heard = store.rows(rid, "heard")
+    assert [(h["text"], h["line_id"], h["at"], h["echo"]) for h in heard] == [("第一点先做登录", line.id, 0.4, False)]
+    assert [r["event"] for r in store.rows(rid, "timeline")] == ["start", "end"]
+
+
+def test_keep_audio_is_a_setting_with_three_choices(client):
+    st = client.get("/api/state").json()
+    assert st["settings"]["keep_audio"] == "always"
+    assert st["keep_audio_options"] == {"always": "一直留着", "until_polished": "整理完就删", "never": "不留"}
+    assert client.patch("/api/settings", json={"keep_audio": "forever"}).status_code == 400
+    assert client.patch("/api/settings", json={"keep_audio": "until_polished"}).status_code == 200
+
+
+def test_until_polished_drops_the_sound_once_the_transcript_is_written(client):
+    hub = client.hub
+    hub.brain.replies = ["[静]"] * 20
+    hub.worker.polished = "[10:00:00] 张三：我们先做登录。"
+    hub.worker.polish_delay = 0.3                    # 整理稿比纪要慢
+    client.patch("/api/settings", json={"keep_audio": "until_polished"})
+    client.post("/api/meeting/start")
+    rid = client.get("/api/state").json()["record_id"]
+    with client.websocket_connect("/ws/audio") as stage:
+        for f in frames(30):
+            stage.send_bytes(f)
+        deadline = time.time() + 3
+        while hub.audio.samples < 30 * 640 and time.time() < deadline:
+            time.sleep(0.01)
+    for i in range(5):
+        client.post("/api/utterance", json={"speaker": "张三", "text": f"第{i}点我们先做登录"})
+    wait_for(client, lambda s: len(s["lines"]) >= 5)
+    client.post("/api/meeting/stop")
+    assert hub.audio_store.has_audio(rid)            # 整理稿还没写好：声音先留着
+    deadline = time.time() + 3
+    while hub.audio_store.has_audio(rid) and time.time() < deadline:
+        time.sleep(0.05)
+    assert not hub.audio_store.has_audio(rid)
+    assert "## 整理稿" in client.get("/api/meetings/latest").text
+    assert hub.audio_store.rows(rid, "timeline")       # 文字那几份留着

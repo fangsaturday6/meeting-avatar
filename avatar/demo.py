@@ -19,7 +19,7 @@ os.environ.setdefault("AVATAR_WORKSPACE", tempfile.mkdtemp(prefix="avatar-demo-"
 import numpy as np  # noqa: E402
 import uvicorn  # noqa: E402
 
-from . import connect  # noqa: E402
+from . import connect, glossary  # noqa: E402
 from .api import Hub, create_app  # noqa: E402
 from .config import DESIGN_DIR, Settings  # noqa: E402
 from .floor import WorkResult  # noqa: E402
@@ -40,6 +40,7 @@ DESIGN_HTML = """<!doctype html><meta charset="utf-8"><title>登录页</title>
 <b style="font-size:20px">登录</b><input placeholder="手机号" style="padding:12px;border:1px solid #ddd;border-radius:10px;font-size:15px">
 <input placeholder="验证码" style="padding:12px;border:1px solid #ddd;border-radius:10px;font-size:15px">
 <button type="button" style="padding:12px;border:0;border-radius:10px;background:#111;color:#fff;font-size:15px">登录</button></form>"""
+GLOSSARY = "# 公司\n青禾科技：公司名\n企微\n回价：供应商回复的报价\n\n# 会上的人\n张总\n李工\n"
 PACE = 1.0   # 演示节奏的倍数；测试里调快
 SCRIPT = [  # (等几秒, 谁, 说什么)
     (1.5, "张总", "登录先做手机号还是微信？"),
@@ -151,6 +152,8 @@ class DemoHub(Hub):
         self.floor.voice_probe = None
         self.ready = {"ears": True, "speakers": True, "local_voice": True}
         self.autoplay = autoplay
+        if not glossary.GLOSSARY_FILE.exists():      # 常用词表给几个样子；数据在临时目录里，不碰真实的词表
+            glossary.save(GLOSSARY)
 
     async def load(self) -> None:
         self.meeting.emit("ready", ready=self.ready)

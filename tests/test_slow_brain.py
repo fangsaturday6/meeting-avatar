@@ -1,7 +1,7 @@
 """慢脑：不真的启动 claude，只检查它为每种任务准备的工作目录、命令和提示。"""
 import pytest
 
-from avatar import knowledge, slow_brain
+from avatar import glossary, knowledge, slow_brain
 from avatar.config import Settings
 from avatar.floor import WorkResult
 from avatar.meeting import Task
@@ -13,6 +13,7 @@ def brain(monkeypatch, tmp_path):
     knowledge.forget()
     monkeypatch.setattr(knowledge, "CLAUDE_HOME", tmp_path / "claude-home")
     monkeypatch.setattr(slow_brain, "MEETINGS_DIR", tmp_path / "meetings")
+    monkeypatch.setattr(glossary, "GLOSSARY_FILE", tmp_path / "glossary.txt")
     b = SlowBrain(Settings())
     b.calls = []
 
@@ -199,3 +200,30 @@ async def test_polish_goes_piece_by_piece_and_a_bad_piece_keeps_the_original(bra
 async def test_nothing_to_polish(brain):
     assert await brain.polish("") == "" and await brain.polish("## 后台任务\n\n### 查资料：x\n") == ""
     assert brain.calls == []
+
+
+async def test_polish_and_minutes_are_told_which_words_may_be_misheard(brain, monkeypatch, tmp_path):
+    (tmp_path / "glossary.txt").write_text("回价：供应商回复的报价\n企微\n青禾科技\n小克\n", encoding="utf-8")
+    record = ("[10:00:05] 张三：数字人回家比我快。\n\n[10:00:09] 小克：小课在，起微上也发了。\n\n"
+              "[10:00:15] 李四：好的。\n\n## 后台任务\n\n### 查资料：清河科技\n")
+    answers(brain, monkeypatch, "[10:00:05] 张三：数字人回价比我快。\n[10:00:09] 小克：好。\n[10:00:15] 李四：好的。",
+            "标题\n\n### 概要\n谈了回价。")
+    out = await brain.polish(record)
+    assert "[10:00:05] 张三：数字人回价比我快。" in out
+    head = brain.calls[0]["stdin"].split("=== 记录 ===")[0]
+    assert "- 回价（记录里写成：回家）：供应商回复的报价" in head
+    # 数字人自己的话不改，所以不拿它的话去对词表；任务结果不在整理稿里，也不对；没对上的词不带出去
+    assert "企微" not in head and "青禾科技" not in head and "小课" not in head
+    assert "{" not in head and "}" not in head
+
+    await brain.summarize(record)
+    head = brain.calls[1]["stdin"].split("=== 会议记录 ===")[0]
+    assert "- 回价（记录里写成：回家）" in head and "- 青禾科技（记录里写成：清河科技）" in head   # 纪要看的是整份记录，任务结果也算
+    assert "{" not in head and "}" not in head
+
+
+async def test_without_a_glossary_the_prompts_say_nothing_about_it(brain, monkeypatch):
+    answers(brain, monkeypatch, "[10:00:05] 张三：数字人回家比我快。", "标题\n\n### 概要\n没什么。")
+    await brain.polish("[10:00:05] 张三：数字人回家比我快。")
+    await brain.summarize("[10:00:05] 张三：数字人回家比我快。")
+    assert all("常用词" not in c["stdin"] for c in brain.calls)

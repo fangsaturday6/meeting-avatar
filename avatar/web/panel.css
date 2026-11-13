@@ -85,9 +85,15 @@ button.who:hover { color: var(--ink); text-decoration: underline; }
 #settings hr { border: 0; border-top: 1px solid var(--line); margin: 2px 0; width: 100%; }
 .field-error { margin: 0; color: var(--danger); font-size: 13px; }
 
+/* 常用词：标题、词数、导入按钮一行，下面是词表本身 */
+#glossary { display: grid; gap: 5px; }
+#glossary-head { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+#glossary h2, #agents h2 { margin: 0; font-size: 13px; font-weight: 400; color: var(--ink2); }
+#glossary-count { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink3); }
+#glossary-text { font-size: 13.5px; min-height: 5.5em; }
+
 /* 接给我的智能体：一行一个，名字在左，开关或按钮在右。开关不做过渡动画：窗口在后台时动画不走，会停在「没接」的样子 */
 #agents { display: grid; gap: 5px; }
-#agents h2 { margin: 0; font-size: 13px; font-weight: 400; color: var(--ink2); }
 #agents ul { list-style: none; margin: 0; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
 #agents li { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 8px 12px 8px 14px; font-size: 14px; }
 #agents li + li { border-top: 1px solid var(--line); }

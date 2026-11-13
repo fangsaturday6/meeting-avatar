@@ -179,9 +179,23 @@ cd app && npm install && npm run pack
   - **散会后**：和纪要同时，让 Claude 把对话书面化成「整理稿」——改同音字和错字、去掉「那个、就是、然后」
     这类口头禅，谁在什么时候说的不变；听不清的地方保留原样，不猜。整理稿放在纪要后面，
     逐句对话留在它下面，可以对照。整理稿里多出没说过话的人、写成了总结、删得只剩一点，都会被作废。
+- 人名、公司名、行话这类识别模型不认识的词，写进**常用词**（设置窗口里有一块）：一行一个词，后面可以跟一句说明
+  （`回价：供应商回复的报价`），`#` 开头是注释，改完下一次整理就生效。整理纪要和整理稿之前，先按读音找出这场会里
+  可能被认错的地方（「回家」对上了「回价」），只把这些词交给 Claude 结合上下文判断——不照着读音直接换，
+  「以及」和「一级」读音也一样。
+  - **导入现成的名单**：点「导入文件」，可以一次选几个。文本文件一行一个；表格先另存成 CSV，第一列是词、第二列是说明，
+    有表头就按表头找（「姓名」「名称」「客户名称」那一列是词，「说明」「备注」那一列是说明）；
+    公司本体（ontology-kit 格式的 YAML）取里面的对象、属性、规则名、动作名。只追加还没有的词，已有的行不动，可以反复导。
+  - **会上的人不用自己加**：你在记录里给说话人改的名字会自动记进去。
+  - 后台没开着时用命令行：`uv run python tools/glossary_import.py <文件或本体目录>`。词表本身是
+    `workspace/glossary.txt`，直接改这个文件也行。
 - 没点「结束会议」就断掉的会（后台被重启、电脑合盖、当时没网）也不会漏：每次启动后台，
   它会把最近还没有纪要的会补上。
 - 会后给说话人改名，文件里的名字跟着改。
+- **录音**另存在 `workspace/audio/<会议编号>/`，和记录同名：原始声音每 60 秒一块（`mic-0000.wav` …，16k 单声道），
+  `heard.jsonl` 是每句识别结果（从录音第几秒开始、多长、认成了谁、声纹），`timeline.jsonl` 记着哪里丢过声音。
+  进程被杀最多丢最后一秒，下次启动自动补封。设置窗口的「录音」选留多久：一直留着（默认）/ 整理完就删 / 不留；
+  删的只是声音，文字和声纹总是留着。留着录音，以后才能会后重算说话人、拿真实的会比较识别参数。
 - 设置窗口的「记录」里，没开会时列的就是以前的会议，点一条就在窗口里读；可以重新整理纪要、复制文件路径。
 
 ### 让你自己的 AI 读会议
@@ -236,9 +250,12 @@ uv run python -m avatar.connect
 | POST | `/api/meetings/{id}/minutes` | 整理（或重新整理）这场会的纪要和整理稿，后台进行。纪要好了事件流里有 `minutes` 事件；整理稿晚一些，补进记录后再发一次 `meetings` 事件 |
 | GET | `/api/agents` | 会议记录接给了哪些智能体：`clients` 里每个有 `id`（`claude` / `codex`）和 `state`（`on` 已接上 / `off` 没接 / `missing` 没装 / `taken` 那边有个同名的别的服务 / `unknown` 没能确认）；`guide` 是写给别的智能体看的接入说明，`mcp`、`api` 是其中的地址。要去问本机的 Claude Code 和 Codex，会花一两秒 |
 | PUT | `/api/agents/{id}` `{connected}` | 把会议记录接给这个智能体，或者取消。动不了时回 409 和原因。成了之后事件流里有 `agents` 事件 |
+| GET | `/api/glossary` | 常用词表：`text` 是原文（一行一个词，后面可以跟「：说明」，`#` 开头是注释），`count` 是里面有几个词 |
+| PUT | `/api/glossary` `{text}` | 把整张词表换成这段文字。成了之后事件流里有 `glossary` 事件（带新的 `text`、`count`） |
+| POST | `/api/glossary/import` `{text, name?}` | 把一份名单并进词表，只追加还没有的词，回的 `added` 是新加了几个。`name` 是文件名，按后缀认格式：`.csv` / `.tsv` 表格、`.yaml` 公司本体，其余（或不写）当一行一个。读不懂回 400 和原因 |
 | POST | `/mcp` | HTTP 方式的 MCP（一问一答，回 JSON），工具和登记给 Claude Code 的那套一样：`list_meetings`、`read_meeting`、`search_meetings`，都是只读的 |
 | WS | `/ws/events` | 状态事件流，连接后先收到全量快照 |
-| WS | `/ws/audio` | 主窗口的音频通道（同一时间只有一个窗口负责收音和播放） |
+| WS | `/ws/audio` | 主窗口的音频通道（同一时间只有一个窗口负责收音和播放）。送上来的声音帧是 `PCM1` + 4 字节小端序号 + 16k 单声道 16 位 PCM（每包 40 毫秒）；序号跳了说明中间有声音没送到。没有帧头的整包当声音 |
 
 界面上的每个按钮和表单项都有固定的 `id`，改版不改名（`tests/test_pages.py` 里有清单并会检查）。它们和接口的对应关系：
 
@@ -251,10 +268,12 @@ uv run python -m avatar.connect
 | `#btn-board-close` 收起资料板、「记录」里的 `.task[data-task-id]` | `POST /api/board` |
 | `#composer`（`#say-kind` 选「说话」） | `POST /api/utterance`，说话人是设置里「我的名字」 |
 | `#composer`（`#say-kind` 选任务类型） | `POST /api/tasks` |
-| 对话里的 `button.who[data-speaker-id]` | `PATCH /api/speakers/{id}` |
+| 对话里的 `button.who[data-speaker-id]` | `PATCH /api/speakers/{id}`（这样写下的名字同时记进常用词） |
 | `#settings` 里带 `name` 的每一项、每一组几选一（`data-setting`） | `PATCH /api/settings` |
 | 「记录」里的 `#btn-meetings`、`.meeting[data-meeting-id]` | `GET /api/meetings`、`GET /api/meetings/{id}` |
 | `#btn-minutes` 整理纪要 | `POST /api/meetings/{id}/minutes` |
+| `#glossary-text` 常用词（离开输入框就存；`#glossary-count` 是词数） | `GET /api/glossary`、`PUT /api/glossary` |
+| `#btn-glossary-import` 导入文件（选文件的是 `#glossary-file`） | `POST /api/glossary/import`，一个文件一次 |
 | `#agent-claude`、`#agent-codex` 开关（`aria-checked` 是接没接上） | `PUT /api/agents/{id}` |
 | `#btn-copy-agent-guide` 复制一段话发给它 | `GET /api/agents` 的 `guide` |
 
@@ -276,24 +295,31 @@ uv run python -m avatar.connect
 | `project_dir`、`projects_root` | 这场会聊的项目、所有项目所在的目录 | `set-project`、`set-projects-root` |
 | `topic` | 会议背景 | `set-topic` |
 | `voice`、`speed` | 嗓音、语速 | `set-voice`、`set-speed` |
+| `keep_audio` | 录音留多久：`always` 一直留着 / `until_polished` 整理稿写好就删 / `never` 不留（取值也在 `/api/state` 的 `keep_audio_options` 里） | `set-keep-audio` |
 
 `/api/state` 里的 `projects` 是它认出来的项目，`minuting` 是正在整理纪要的会议。
 `stage_online` 是有没有窗口接通了声音，`mic_online` 是那个窗口的麦克风声音有没有真的送到后台：
 开着会、`stage_online` 为真而 `mic_online` 为假，就是它现在只能说、听不到（耳机断开、麦克风被拔掉），
-主窗口会自己重新接麦克风，接不上时在顶部提示（`#btn-mic-retry` 重试）。事件流里这两项都走 `flag` 事件。
+主窗口会自己重新接麦克风，接不上时在顶部提示（`#btn-mic-retry` 重试）。
+`mic_health` 为 `silent` 是声音在送、但一直是数字静音（麦克风被关了、没给权限），同样算听不到；只在当面开会时判断，
+线上会议走虚拟声卡，没人说话时本来就是静音。事件流里这三项都走 `flag` 事件。
+字幕行（`lines`）里听来的话带 `at`：从这场会录音的第几秒开始。
 
 ## 代码结构
 
 | 文件 | 职责 |
 |---|---|
 | `avatar/floor.py` | 发言决策：什么时候想、什么时候开口、什么时候让话 |
-| `avatar/ears.py` | 断句、识别（顺手挡掉杂音）、声纹 |
+| `avatar/ears.py` | 断句、识别（顺手挡掉杂音）、声纹；每句话记下它在录音里的位置 |
+| `avatar/audio_in.py`、`recorder.py` | 声音的入口：解帧、计时、看是不是一直静音、交给识别；录音分块落盘、保留策略 |
+| `avatar/replay.py` | 重放评测台：拿存下来的录音喂给真实的耳朵，和会上听到的、和另一套参数逐句比 |
 | `avatar/fast_brain.py` | 快脑：常驻的 Claude Haiku，负责接话。它怎么说话全在这个文件的提示词里 |
 | `avatar/slow_brain.py` | 慢脑：按需启动本机 Claude Code 干活、会后整理纪要和整理稿 |
 | `avatar/knowledge.py` | 它对你的了解：你电脑上有哪些项目、你的 Claude 记下的事 |
 | `avatar/mouth.py` | 语音合成：本地优先，在线和系统语音兜底 |
 | `avatar/meeting.py`、`speakers.py`、`config.py` | 会议状态、说话人、设置 |
 | `avatar/archive.py` | 会议记录：写盘（去语气词、并成段）、列表、读取、纪要和整理稿 |
+| `avatar/glossary.py` | 常用词表：存、追加、从名单和公司本体里读词；按读音找出记录里可能被认错的词，写成给纪要和整理稿的提示（只提示，不改字） |
 | `avatar/mcp_server.py`、`connect.py` | 把会议记录接给你自己的智能体：只读的 MCP 工具；登记到本机的 Claude Code 和 Codex；写给别的智能体看的接入说明 |
 | `avatar/api.py` | REST 和 WebSocket |
 | `avatar/web/stage.*` | 主窗口：形象、资料板、字幕、提示、控制条 |
@@ -301,6 +327,7 @@ uv run python -m avatar.connect
 | `avatar/web/character.js` | 3D 舞台（镜头、灯光、状态色）和代码搭的备用形象（three.js，放在 `vendor/` 里，不联网）；`avatar.js` 是不支持 3D 时的 2D 备用形象 |
 | `avatar/web/model.js` | 从 `avatar/web/models/` 加载做好的 3D 形象（GLB 文件），按状态播动作、驱动脸 |
 | `tools/figure.py` | Blender 脚本：给形象绑骨、做每种状态的动作、导出 GLB |
+| `tools/glossary_import.py` | 命令行导入常用词：一份名单或一个公司本体仓库（后台没开着时用） |
 | `avatar/web/api.js`、`audio.js` | 接口与状态、收音与播放（两个窗口共用） |
 | `avatar/demo.py` | 演示后台：不需要模型、网络和 Claude，数据放临时目录 |
 | `app/` | 桌面外壳（Electron）：起后台、开窗口、菜单；`pack.js` 打包，`setup.js` 安装 Electron |
@@ -350,7 +377,13 @@ uv run pytest                      # 单元测试，不需要模型和网络
 uv run pytest -m live -s           # 真实模型和本机 Claude
 uv run python -m tests.e2e_voice   # 语音端到端：两位模拟与会者说话、提问、插话
 uv run python -m tests.scenarios   # 用真实大脑演练十几种会议场景，看它怎么接话（改了提示词之后跑）
+uv run python -m avatar.replay latest --diff heard               # 拿最近一场会的录音重听，和会上听到的逐句比
+uv run python -m avatar.replay latest --set min_silence=0.6 --save s06   # 换参数重听并存下，之后 --diff s06 比较
 ```
+
+调断句、识别、认人的参数之前，先拿真实的会用 `avatar.replay` 比一比（能调的有 `lead_in`、`min_silence`、
+`min_embed_seconds`、`vad_threshold`、`min_speech`、`max_speech`、`threads`，认人阈值用 `--threshold`）。
+识别要占几个核，别在正开着会的时候跑。
 
 ## 实测数据（M1 / 16GB）
 
@@ -363,7 +396,8 @@ uv run python -m tests.scenarios   # 用真实大脑演练十几种会议场景�
 
 - 几个人同时说话时识别会变差。
 - 离麦克风远、声音小、外放转录的声音，识别出来的字本身就是错的，后面几层整理救不回来（整理稿不猜）。
-  专有名词（项目名、人名、英文术语）目前靠整理稿结合会议背景改，识别模型本身还不支持热词。
+  专有名词（项目名、人名、英文术语）靠会后的纪要和整理稿改：有常用词表就对着词表改，没有就只能结合会议背景猜。
+  识别模型本身不支持热词，所以开会时的字幕和逐句对话里还是原样；被认成拼写差得远的英文词（Kestrel 认成 Castle）也对不上。
 - 一两秒的短句分不清是谁说的，会算到上一位说话人头上。
 - 网络断断续续时它会说「网络有点卡」，连上后再把问题答了；完全断网时只有字幕和会议记录能用。
 - 本机 `claude` 命令行版本较旧时，干活只能用它的默认模型；`claude update` 之后可以在设置里换。
@@ -372,7 +406,9 @@ uv run python -m tests.scenarios   # 用真实大脑演练十几种会议场景�
 ## 隐私
 
 - 声音不离开这台电脑：识别、断句、声纹都在本地；选了在线嗓音时，它要说的文字会发给在线语音服务。
+- 录音和声纹存在 `workspace/audio/`，目录只有你自己的账户能读；不想留录音就在设置里选「整理完就删」或「不留」。
 - 会议里的文字会发给你的 Claude（接话、查东西、整理纪要都靠它），走的是你本机 `claude` 命令行的登录。
+- 常用词表整张只在本机。整理一场会时，只有和这场会里的字读音对得上的那几个词（连同说明）会随记录发给你的 Claude。
 - 会议记录和设置只存在本机的 `workspace/` 里，这个目录不进 git。把项目拷给别人时用 `git clone`，不要直接压缩整个文件夹。
 - 把会议记录接给你的智能体之后，它在任何项目里都能读到所有场次，读到的内容会随对话发给它背后的模型服务。
 
