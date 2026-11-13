@@ -77,3 +77,38 @@ def test_settings_validate_and_roundtrip(tmp_path):
     f = tmp_path / "s.json"
     s.save(f)
     assert Settings.load(f).name == "阿克"
+
+
+async def test_naming_someone_like_another_merges_them():
+    m = Meeting()
+    q = m.subscribe()
+    a, b = m.speakers.by_name("张三"), m.speakers._new().id
+    m.add_line("human", "我先说", a)
+    m.add_line("human", "我补充", b)
+    drain(q)
+    sp = m.rename_speaker(b, " 张三 ")                                # 说话人2 其实也是张三
+    assert sp["id"] == a and list(m.speakers.speakers) == [a]
+    assert [(l.speaker_id, l.speaker) for l in m.lines] == [(a, "张三"), (a, "张三")]
+    assert any(e["type"] == "snapshot" for e in drain(q))
+
+
+async def test_one_line_can_be_given_to_someone_else_and_stays_there():
+    m = Meeting()
+    a, b = m.speakers.by_name("张三"), m.speakers.by_name("李四")
+    l1 = m.add_line("human", "我先说", a)
+    l2 = m.add_line("human", "这句其实是李四说的", a)
+    m.reassign_line(l2.id, b)
+    assert (l2.speaker_id, l2.speaker, l2.pinned) == (b, "李四", True) and l1.speaker_id == a
+    with pytest.raises(KeyError):
+        m.reassign_line(l1.id, 99)
+
+
+async def test_recheck_results_are_applied_and_empty_speakers_disappear():
+    m = Meeting()
+    a, b = m.speakers._new().id, m.speakers._new().id
+    lines = [m.add_line("human", t, sid) for t, sid in (("一", a), ("二", b), ("三", b))]
+    assert m.apply_speakers({lines[1].id: a, lines[2].id: -1}) == 2
+    new = lines[2].speaker_id
+    assert lines[1].speaker_id == a and new not in (a, b)
+    assert set(m.speakers.speakers) == {a, new}                       # 说话人2 一句都不剩了，去掉
+    assert m.speakers.speakers[a].count == 2

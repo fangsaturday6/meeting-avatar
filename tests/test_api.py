@@ -18,7 +18,7 @@ def client(monkeypatch, tmp_path):
     from avatar import glossary, models
     monkeypatch.setattr(glossary, "GLOSSARY_FILE", tmp_path / "glossary.txt")
     monkeypatch.setattr(models, "missing", lambda include_optional=True: [models.ASR])  # 测试里不加载模型
-    s = Settings(); s.gap = 0.02; s.silence_nudge = 0.0
+    s = Settings(); s.gap = 0.02; s.silence_nudge = 0.0; s.announce = False
     hub = Hub(settings=s, brain=FakeBrain(["先做登录吧。", "[静]"]), mouth=FakeMouth(),
               worker=FakeWorker(), save_settings=False, archive=Archive(tmp_path),
               audio_store=AudioStore(tmp_path / "audio"))
@@ -58,7 +58,7 @@ def test_full_text_meeting(client):
     assert line["speaker"] == "张三" and line["who"] == "human"
     st = wait_for(client, lambda s: len(s["lines"]) == 2 and s["status"] == "listening")
     assert st["lines"][1]["who"] == "bot" and st["lines"][1]["text"] == "先做登录吧。"
-    assert st["speakers"] == [{"id": 1, "name": "张三", "count": 1}]
+    assert st["speakers"] == [{"id": 1, "name": "张三", "count": 1, "locked": False}]
 
     assert client.patch("/api/speakers/1", json={"name": "张总"}).json()["name"] == "张总"
     assert client.patch("/api/speakers/9", json={"name": "x"}).status_code == 404
@@ -443,7 +443,8 @@ def test_meetings_are_readable_over_http_mcp(client, tmp_path):
     assert init["serverInfo"]["name"] == "meetings" and init["protocolVersion"] == "2025-06-18"
     r = client.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"})
     assert r.status_code == 202 and not r.content           # 通知不回内容
-    assert [t["name"] for t in rpc("tools/list").json()["result"]["tools"]] == ["list_meetings", "read_meeting", "search_meetings"]
+    assert [t["name"] for t in rpc("tools/list").json()["result"]["tools"]] == ["list_meetings", "read_meeting", "read_since",
+                                                                                "search_meetings"]
     found = rpc("tools/call", name="search_meetings", arguments={"query": "供应商"}).json()["result"]
     assert not found["isError"] and "供应商接口下周上线" in found["content"][0]["text"]
     assert rpc("resources/list").json()["error"]["code"] == -32601
@@ -538,10 +539,11 @@ def test_the_sound_of_a_meeting_is_kept_and_each_line_knows_its_place(client):
     assert [r["event"] for r in store.rows(rid, "timeline")] == ["start", "end"]
 
 
-def test_keep_audio_is_a_setting_with_three_choices(client):
+def test_keep_audio_is_a_setting_with_four_choices(client):
     st = client.get("/api/state").json()
-    assert st["settings"]["keep_audio"] == "always"
-    assert st["keep_audio_options"] == {"always": "一直留着", "until_polished": "整理完就删", "never": "不留"}
+    assert st["settings"]["keep_audio"] == "two_hours"
+    assert st["keep_audio_options"] == {"two_hours": "留 2 小时", "always": "一直留着", "until_polished": "整理完就删",
+                                        "never": "不留"}
     assert client.patch("/api/settings", json={"keep_audio": "forever"}).status_code == 400
     assert client.patch("/api/settings", json={"keep_audio": "until_polished"}).status_code == 200
 
@@ -571,3 +573,102 @@ def test_until_polished_drops_the_sound_once_the_transcript_is_written(client):
     assert not hub.audio_store.has_audio(rid)
     assert "## 整理稿" in client.get("/api/meetings/latest").text
     assert hub.audio_store.rows(rid, "timeline")       # 文字那几份留着
+
+
+def test_it_says_up_front_that_it_keeps_a_record(client):
+    hub = client.hub
+    hub.settings.announce = True
+    hub.settings.owner, hub.settings.role = "老方", "delegate"
+    client.post("/api/meeting/start")
+    st = wait_for(client, lambda s: s["lines"] and s["status"] == "listening")
+    assert st["lines"][0]["who"] == "bot" and st["lines"][0]["text"] == "大家好，我是老方的 AI 助手小克，这场会我会记录下来。"
+    client.post("/api/meeting/stop")
+    client.patch("/api/settings", json={"announce": False})
+    client.post("/api/meeting/start")
+    time.sleep(0.2)
+    assert client.get("/api/state").json()["lines"] == []
+
+
+def test_recordings_older_than_two_hours_are_dropped(client):
+    hub = client.hub
+    r = hub.audio_store
+    from avatar.recorder import Recorder
+    rec = Recorder(r.folder("2026-11-01_090000"), keep=lambda: "always")
+    rec.write(b"\1\0" * 20000)
+    rec.event(event="end", at=1.25, wall=time.time() - 3 * 3600)
+    rec.close()
+    hub.settings.keep_audio = "always"
+    assert hub.sweep_audio() == [] and r.has_audio("2026-11-01_090000")
+    hub.settings.keep_audio = "two_hours"
+    assert hub.sweep_audio() == ["2026-11-01_090000"] and not r.has_audio("2026-11-01_090000")
+
+
+def test_speakers_are_checked_again_after_the_meeting(client):
+    """会上把两个人都当成了「张三」：散会后拿整场的声纹重新分，B 的几句分给新的一位，再整理纪要。"""
+    import numpy as np
+    hub = client.hub
+    hub.brain.replies = ["[静]"] * 20
+    rng = np.random.default_rng(3)
+    a, b = rng.normal(size=32), rng.normal(size=32)
+    client.post("/api/meeting/start")
+    with client.websocket_connect("/ws/audio") as stage:
+        for f in frames(3):
+            stage.send_bytes(f)
+        deadline = time.time() + 3
+        while hub.audio.samples < 3 * 640 and time.time() < deadline:
+            time.sleep(0.01)
+    voices = [a, b, a, b, a, b]
+    for i in range(len(voices)):
+        client.post("/api/utterance", json={"speaker": "张三", "text": f"第{i}句"})
+    st = wait_for(client, lambda s: len(s["lines"]) == 6)
+    for line, v in zip(st["lines"], voices):
+        line_obj = next(l for l in hub.meeting.lines if l.id == line["id"])
+        hub.audio.heard(line["text"], v + rng.normal(scale=0.2, size=32), 3.0, 0.0, line_obj)
+    client.post("/api/meeting/stop")
+    st = client.get("/api/state").json()
+    who = [l["speaker"] for l in st["lines"]]
+    assert who[0::2] == ["张三"] * 3 and len(set(who[1::2])) == 1 and who[1] != "张三"
+    wait_for(client, lambda s: s["meetings"] and s["meetings"][0]["minutes"] == "yes")
+    assert f"{who[1]}：第1句" in hub.worker.summarized[0]            # 纪要用的是核对过的名字
+
+
+def test_one_line_can_be_given_to_someone_else(client):
+    client.hub.brain.replies = ["[静]"] * 20
+    client.post("/api/meeting/start")
+    client.post("/api/utterance", json={"speaker": "张三", "text": "我先说"})
+    client.post("/api/utterance", json={"speaker": "李四", "text": "我补充"})
+    st = wait_for(client, lambda s: len(s["lines"]) == 2)
+    first, second = st["lines"]
+    r = client.patch(f"/api/lines/{first['id']}", json={"speaker_id": second["speaker_id"]})
+    assert r.status_code == 200 and r.json()["speaker"] == "李四" and r.json()["pinned"]
+    assert client.patch("/api/lines/999", json={"speaker_id": second["speaker_id"]}).status_code == 404
+    assert client.patch(f"/api/lines/{first['id']}", json={"speaker_id": 999}).status_code == 404
+    r = client.patch(f"/api/speakers/{second['speaker_id']}", json={"name": "张三"})   # 起成别人的名字 = 是同一个人
+    assert r.json()["name"] == "张三"
+    assert {l["speaker"] for l in client.get("/api/state").json()["lines"]} == {"张三"}
+
+
+def test_a_meeting_can_be_kept_from_the_agents(client):
+    client.hub.brain.replies = ["[静]"] * 20
+    client.post("/api/meeting/start")
+    client.post("/api/utterance", json={"speaker": "张三", "text": "这事先别外传"})
+    rid = wait_for(client, lambda s: s["lines"])["record_id"]
+    assert client.patch(f"/api/meetings/{rid}", json={"private": True}).json()["private"] is True
+    client.post("/api/meeting/stop")
+    assert client.get("/api/meetings").json()[0]["private"] is True             # 散会重存后标记还在
+    r = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                  "params": {"name": "read_meeting", "arguments": {"id": rid}}})
+    assert r.json()["result"]["isError"] and "不给智能体看" in r.json()["result"]["content"][0]["text"]
+    assert client.patch(f"/api/meetings/{rid}", json={"private": False}).json()["private"] is False
+    assert client.patch("/api/meetings/2020-01-01_000000", json={"private": True}).status_code == 404
+
+
+def test_off_the_record_over_the_api(client):
+    assert client.post("/api/record", json={"on": False}).status_code == 409
+    client.post("/api/meeting/start")
+    assert client.post("/api/record", json={"on": False}).json() == {"recording": False}
+    client.post("/api/utterance", json={"speaker": "张三", "text": "工资是这个数"})
+    st = wait_for(client, lambda s: s["lines"])
+    assert st["recording"] is False and st["lines"][0]["off"] is True
+    client.post("/api/record", json={"on": True})
+    assert client.get("/api/state").json()["recording"] is True

@@ -106,3 +106,19 @@ def test_never_keep_audio_deletes_the_sound_when_the_meeting_ends(tmp_path):
     audio.finish()
     assert not store.has_audio(m.record_id)
     assert store.rows(m.record_id, "timeline")
+
+
+def test_off_the_record_sound_is_heard_but_not_kept(tmp_path):
+    m, ears, store, audio = setup(tmp_path)
+    audio.feed(frame(0))
+    m.recording = False
+    audio.feed(frame(1))
+    audio.heard("工资是这个数", None, 1.0, 0.04, None)
+    audio.feed(frame(2))
+    m.recording = True
+    audio.feed(frame(3))
+    audio.finish()
+    assert len(ears.fed) == 4                                   # 耳朵照样听
+    assert len(store.pcm(m.record_id)) == 2 * FRAME * 2         # 录音里只有记录的那两包
+    assert store.rows(m.record_id, "heard") == []
+    assert [r["event"] for r in store.rows(m.record_id, "timeline")] == ["start", "off", "on", "end"]

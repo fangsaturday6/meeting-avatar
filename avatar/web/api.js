@@ -36,6 +36,7 @@ export const api = {
   say: (text) => call('POST', '/api/say', { text }),
   hush: () => call('POST', '/api/hush'),
   mute: (muted) => call('POST', '/api/mute', { muted }),
+  record: (on) => call('POST', '/api/record', { on }),
   renameSpeaker: (id, name) => call('PATCH', `/api/speakers/${id}`, { name }),
   createTask: (kind, brief) => call('POST', '/api/tasks', { kind, brief }),
   showOnBoard: (task_id) => call('POST', '/api/board', { task_id }),
@@ -43,6 +44,7 @@ export const api = {
   meetings: () => call('GET', '/api/meetings'),
   meeting: (id) => callText(`/api/meetings/${encodeURIComponent(id)}`),
   makeMinutes: (id) => call('POST', `/api/meetings/${encodeURIComponent(id)}/minutes`),
+  setPrivate: (id, isPrivate) => call('PATCH', `/api/meetings/${encodeURIComponent(id)}`, { private: isPrivate }),
   figures: () => call('GET', '/api/figures'),
   agents: () => call('GET', '/api/agents'),
   connectAgent: (id, connected) => call('PUT', `/api/agents/${encodeURIComponent(id)}`, { connected }),
@@ -89,6 +91,7 @@ export function emptyState() {
     status: 'off', muted: false, brain_ok: true, stage_online: false, humans_speaking: false,
     mic_online: true,   // 接通声音的窗口有没有把麦克风的声音送到后台；后台没报之前先当它有
     mic_health: 'ok',   // silent = 送来的一直是数字静音（麦克风被关了、没权限）
+    recording: true,    // 假 = 有人说了「这段别记」：照样听，但不进记录、不录音
     settings: {}, speakers: [], lines: [], tasks: [], board_task_id: null,
     meetings: [], record_id: '', minuting: [], minutes_result: null, projects: { root: '', names: [] },
     agents: null,      // 会议记录接给了哪些智能体。要去问本机的 Claude Code / Codex，慢，所以不在全量状态里，由设置窗口单独取

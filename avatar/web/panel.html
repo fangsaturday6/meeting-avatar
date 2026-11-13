@@ -37,6 +37,7 @@
       <header id="reader-head">
         <button id="btn-reader-close" class="icon-btn" type="button" data-icon="back" aria-label="返回" title="返回"></button>
         <div id="reader-heading"><h2 id="reader-title"></h2><p id="reader-sub"></p></div>
+        <button id="btn-private" class="icon-btn" type="button" data-icon="lock" aria-pressed="false" aria-label="不给智能体看" title="不给智能体看"></button>
         <button id="btn-minutes" class="text-btn" type="button">整理纪要</button>
         <button id="btn-copy-path" class="text-btn" type="button">复制路径</button>
       </header>
@@ -61,6 +62,7 @@
     <label>嗓音<select id="set-voice" name="voice"></select></label>
     <label>语速<input id="set-speed" name="speed" type="range" min="0.8" max="1.5" step="0.05"></label>
     <label class="check"><input id="set-skills" name="use_my_skills" type="checkbox">做设计时用我本机 Claude 的技能</label>
+    <label class="check"><input id="set-announce" name="announce" type="checkbox">开会时先说一句会做记录</label>
     <hr>
     <label>麦克风<select id="mic-select"></select></label>
     <label>扬声器<select id="speaker-select"></select></label>

@@ -36,7 +36,7 @@ def test_handshake_and_tool_list(tmp_path):
     assert "会议" in init["result"]["instructions"]
     assert handle({"jsonrpc": "2.0", "method": "notifications/initialized"}, a) is None
     tools = handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, a)["result"]["tools"]
-    assert [t["name"] for t in tools] == ["list_meetings", "read_meeting", "search_meetings"]
+    assert [t["name"] for t in tools] == ["list_meetings", "read_meeting", "read_since", "search_meetings"]
     assert handle({"jsonrpc": "2.0", "id": 3, "method": "resources/list"}, a)["error"]["code"] == -32601
 
 
@@ -117,3 +117,30 @@ def test_long_meetings_are_read_in_pages(tmp_path):
         pages.append(call(a, "read_meeting", part="dialogue", offset=offset)[0])
         offset += mcp_server.PAGE
     assert "第899句话" in pages[-1] and "后面还有" not in pages[-1] and len(pages) >= 3
+
+
+def test_a_meeting_in_progress_can_be_followed_line_by_line(tmp_path):
+    a = seed(tmp_path)
+    text, bad = call(a, "read_since", id="2026-11-10_100000")
+    assert not bad and text.splitlines()[:3] == ["[10:00:05] 张三：我们先做登录还是支付", "[10:00:09] 小克：先做登录，支付依赖它。",
+                                                "[10:00:20] 李四：供应商接口下周上线"]
+    assert text.endswith("（下次接着读：after=10:00:20）")
+    more, _ = call(a, "read_since", id="2026-11-10_100000", after="10:00:09")
+    assert more.splitlines()[0] == "[10:00:20] 李四：供应商接口下周上线"
+    none, _ = call(a, "read_since", id="2026-11-10_100000", after="10:00:20")
+    assert none == "10:00:20 之后还没有新的话。（下次接着读：after=10:00:20）"
+    assert call(a, "read_since", after="9点")[1]                     # 时刻格式不对
+
+
+def test_private_meetings_stay_out_of_reach(tmp_path):
+    a = seed(tmp_path)
+    assert a.set_private("2026-11-10_100000", True)
+    listed = call(a, "list_meetings")[0]
+    assert "登录排期" not in listed and "2026-11-10_100000｜2026-11-10 10:00｜不给智能体看" in listed
+    for tool, args in (("read_meeting", {"id": "2026-11-10_100000"}), ("read_since", {"id": "2026-11-10_100000"})):
+        text, bad = call(a, tool, **args)
+        assert bad and "不给智能体看" in text and "登录" not in text
+    assert "没有搜到" in call(a, "search_meetings", query="登录")[0]
+    assert "供应商那个接口" in call(a, "search_meetings", query="供应商")[0]
+    a.set_private("2026-11-10_100000", False)
+    assert "登录排期" in call(a, "list_meetings")[0]

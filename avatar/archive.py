@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -131,6 +133,20 @@ def with_minutes(text: str, title: str, summary: str, polished: str = "") -> str
     return "---\n" + "\n".join(keep) + sep + before + block + mark + after
 
 
+_CITE = re.compile(r"\s*[（(]((?:\d\d:\d\d:\d\d)(?:\s*[、,，]\s*\d\d:\d\d:\d\d)*)[)）]")
+_TIME = re.compile(r"\d\d:\d\d:\d\d")
+
+
+def checked_citations(summary: str, dialogue: str) -> str:
+    """纪要里每条后面的（10:02:30）是出处：指向对话里那一段的时刻。记录里没有的时刻是编的，去掉。"""
+    real = set(re.findall(r"(?m)^\[(\d\d:\d\d:\d\d)\]", dialogue))
+
+    def keep(m: re.Match) -> str:
+        times = [t for t in _TIME.findall(m.group(1)) if t in real]
+        return f"（{'、'.join(times)}）" if times else ""
+    return _CITE.sub(keep, summary)
+
+
 def minutes_of(text: str) -> str:
     """一份会议记录里的纪要正文；没有就是空。只认「对话」之前的那一节（后面任务结果里引用的不算）。"""
     return text.partition("\n## 对话\n")[0].partition("\n## 纪要\n")[2].partition("\n## 整理稿\n")[0].strip()
@@ -152,6 +168,20 @@ def render(m: "Meeting") -> str:
     return with_minutes(text, m.title, m.summary, m.polished) if m.title or m.summary else text
 
 
+OFF_RECORD = "（这段按要求没有记录）"
+
+
+def _on_record(lines) -> list:
+    """「这段别记」那几句不进文件：连着的一串换成一行旁注，读的人知道这里有意略过了。"""
+    out = []
+    for l in lines:
+        if not getattr(l, "off", False):
+            out.append(l)
+        elif not out or out[-1].text != OFF_RECORD:
+            out.append(replace(l, who="note", speaker="", text=OFF_RECORD, cut=False))
+    return out
+
+
 def _render(m: "Meeting") -> str:
     end = m.ended_at or (m.lines[-1].t if m.lines else m.started_at)   # 没正常结束的会，以最后一句为准
     head = {
@@ -161,12 +191,13 @@ def _render(m: "Meeting") -> str:
         "bot": m.settings.name,
         "owner": _one_line(m.settings.owner),
         "speakers": "、".join(s["name"] for s in m.speakers.snapshot()),
-        "lines": sum(l.who != "note" and (l.who != "human" or bool(tidy(l.text))) for l in m.lines),
+        "lines": sum(l.who != "note" and not l.off and (l.who != "human" or bool(tidy(l.text))) for l in m.lines),
         "topic": _one_line(m.settings.topic),
+        "private": "yes" if m.private else "",     # 主人设了「不给智能体看」：MCP、下一场会的背景、查会议都读不到
     }
     out = ["---", *(f"{k}: {v}" for k, v in head.items()), "---", "",
            f"# 会议记录 {head['started'][:16]}", "", "## 对话", ""]
-    for l, text in paragraphs(m.lines):
+    for l, text in paragraphs(_on_record(m.lines)):
         out += [f"[{_clock(l.t)}] {l.speaker or '旁注'}：{text}{'（被打断）' if l.cut else ''}", ""]
     if m.tasks:
         out += ["## 后台任务", ""]
@@ -197,6 +228,7 @@ def _meta(path: Path) -> dict:
         "topic": head.get("topic", ""),
         "title": head.get("title", ""),
         "minutes": head.get("minutes", ""),      # yes = 有纪要；none = 整理过但没有实质内容；空 = 还没整理
+        "private": head.get("private") == "yes",
         "file": str(path.resolve()),
     }
 
@@ -245,12 +277,42 @@ class Archive:
         os.replace(tmp, path)
         return True
 
+    def meta(self, meeting_id: str) -> dict | None:
+        if not _ID.fullmatch(meeting_id) or not self._path(meeting_id).exists():
+            return None
+        return _meta(self._path(meeting_id))
+
+    def set_private(self, meeting_id: str, private: bool) -> bool:
+        """给已经存盘的会改「不给智能体看」的标记（改元数据块里的 private 一行）。没有这场会返回 False。"""
+        text = self.read(meeting_id)
+        if text is None:
+            return False
+        head, sep, body = text.partition("\n---\n")
+        lines = [l for l in head.split("\n") if not l.startswith("private:")]
+        lines.append(f"private: {'yes' if private else ''}")
+        path = self._path(meeting_id)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines) + sep + body, encoding="utf-8")
+        os.replace(tmp, path)
+        return True
+
+    def public_copy(self, dest: Path) -> Path:
+        """把没设「不给智能体看」的会复制到 dest（先清空），给查会议的干活进程当工作目录：它看不到的就读不到。"""
+        dest = Path(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        for old in dest.glob("*.md"):
+            old.unlink()
+        for row in self.recent(10_000):
+            if not row["private"]:
+                shutil.copy2(self._path(row["id"]), dest / f"{row['id']}.md")
+        return dest
+
     def last_minutes(self, skip: str = "") -> str:
         """最近一场有纪要的会：标题加纪要正文。开下一场会之前给数字人看，它才接得上「上次说的那个」。"""
         for row in self.recent(8):
-            if row["id"] == skip or row["minutes"] != "yes":
+            if row["id"] == skip or row["minutes"] != "yes" or row["private"]:
                 continue
-            body = minutes_of(self.read(row["id"]) or "")
+            body = _CITE.sub("", minutes_of(self.read(row["id"]) or ""))     # 出处时刻是给人点回原话的，下一场会用不上
             if body:
                 day = time.strftime("%m月%d日", time.localtime(row["started_at"])) if row["started_at"] else ""
                 return f"{day}「{row['title']}」\n{body[:1200]}"

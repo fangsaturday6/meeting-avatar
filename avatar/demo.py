@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import io
 import os
+import re
 import tempfile
 import wave
 
@@ -118,11 +119,20 @@ class DemoWorker:
             return WorkResult(True, RESULTS[task.kind], artifact=f"/designs/demo-{task.id}/index.html")
         return WorkResult(True, RESULTS.get(task.kind, "做完了。"))
 
+    async def summarize(self, transcript: str) -> WorkResult:
+        """假纪要：每条的出处取对话里真实的时刻，看「点出处跳回原话」用。"""
+        await asyncio.sleep(PACE)
+        t = re.findall(r"(?m)^\[(\d\d:\d\d:\d\d)\]", transcript) or ["00:00:00"]
+        at = lambda i: t[min(i, len(t) - 1)]       # noqa: E731
+        return WorkResult(True, f"登录页改版\n\n### 概要\n讨论了登录页先做哪一版，出了一版设计稿。\n\n"
+                                f"### 结论\n- 先做手机号验证码登录（{at(0)}）\n\n"
+                                f"### 待办\n- 李工：接口文档（{at(1)}、{at(2)}）\n")
+
 
 class _NoEars:
     """演示时不做语音识别：麦克风的声音只用来让形象有反应。"""
 
-    def feed(self, pcm: bytes) -> None: ...
+    def feed(self, pcm: bytes, clock: int | None = None) -> None: ...
     def reset(self) -> None: ...
     def close(self) -> None: ...
 
@@ -148,7 +158,7 @@ class DemoHub(Hub):
         s.silence_nudge = 0.0
         super().__init__(settings=s, brain=DemoBrain(s), mouth=DemoMouth(), worker=DemoWorker(), save_settings=False,
                          agents=DemoConnector())
-        self.ears = _NoEars()
+        self.ears = self.audio.ears = _NoEars()
         self.floor.voice_probe = None
         self.ready = {"ears": True, "speakers": True, "local_voice": True}
         self.autoplay = autoplay

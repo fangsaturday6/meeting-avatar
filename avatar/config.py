@@ -25,7 +25,8 @@ ROLES = {"companion": "陪我开会", "delegate": "替我开会"}
 # 参与度：只在被叫到时说 / 有实质补充才说 / 每个议题都主动给看法
 ENGAGEMENTS = {"quiet": "少说", "normal": "适中", "active": "多说"}
 # 每场会的原始录音留多久。留着才能会后重算说话人、拿真实的会比较识别参数
-KEEP_AUDIO = {"always": "一直留着", "until_polished": "整理完就删", "never": "不留"}
+KEEP_AUDIO = {"two_hours": "留 2 小时", "always": "一直留着", "until_polished": "整理完就删", "never": "不留"}
+KEEP_HOURS = 2.0             # 「留 2 小时」从散会算起
 
 
 @dataclass
@@ -49,7 +50,8 @@ class Settings:
     hold: float = 4.0            # 被问到后，旁边一直有别的声音时最多等多久就顶着说
     barge_delay: float = 0.9     # 别人持续说多久算打断。太短的话一声「嗯」就会把它打断
     barge_grace: float = 0.5     # 刚开口的这段时间内不算打断（防回声误触发）
-    keep_audio: str = "always"   # 录音留多久，见 KEEP_AUDIO。文字和声纹总是留着
+    keep_audio: str = "two_hours"  # 录音留多久，见 KEEP_AUDIO。文字和声纹总是留着
+    announce: bool = True        # 开会时先说一句「这场会我会记录」
 
     def to_dict(self) -> dict:
         return asdict(self)

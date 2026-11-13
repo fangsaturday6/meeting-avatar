@@ -69,6 +69,12 @@ button.who:hover { color: var(--ink); text-decoration: underline; }
 #reader-minutes { background: var(--panel); border-radius: 12px; padding: 12px 16px; box-shadow: 0 0 0 1px var(--line); font-size: 14.5px; }
 #reader-minutes h3 { font-size: 13px; color: var(--ink2); margin: 1em 0 .3em; }
 #reader-lines { list-style: none; margin: 0; padding: 0; }
+.line.off { opacity: .45; }
+#reader-minutes .cite { border: 0; background: var(--line); color: var(--ink2); border-radius: 6px; padding: 0 5px; margin-left: 4px;
+  font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; }
+#reader-minutes .cite:hover { color: var(--ink); }
+#reader-lines .line.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { from { background: var(--line); } to { background: transparent; } }
 #reader-lines:empty { display: none; }
 #reader-tasks { border-top: 1px solid var(--line); padding-top: 14px; font-size: 14px; }
 

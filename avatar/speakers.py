@@ -12,9 +12,10 @@ class Speaker:
     name: str
     count: int = 0
     centroid: np.ndarray | None = field(default=None, repr=False)
+    locked: bool = False        # 用户给他起过名字：会后重新核对说话人时，他的句子不动
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "count": self.count}
+        return {"id": self.id, "name": self.name, "count": self.count, "locked": self.locked}
 
 
 def _unit(v: np.ndarray) -> np.ndarray:
@@ -100,7 +101,23 @@ class SpeakerBook:
     def rename(self, speaker_id: int, name: str) -> Speaker:
         sp = self.speakers[speaker_id]
         sp.name = " ".join(name.split()) or sp.name     # 名字里不留换行：它会原样写进会议记录和给大脑的话里
+        sp.locked = True
         return sp
+
+    def merge(self, src: int, dst: int) -> Speaker:
+        """src 其实就是 dst：声音并过去，src 这个编号不再用。"""
+        a, b = self.speakers[dst], self.speakers.pop(src)
+        if b.centroid is not None:
+            a.centroid = b.centroid if a.centroid is None else _unit(a.centroid * max(a.count, 1) + b.centroid * max(b.count, 1))
+        a.count += b.count
+        if self.last_id == src:
+            self.last_id = dst
+        return a
+
+    def forget(self, speaker_id: int) -> None:
+        self.speakers.pop(speaker_id, None)
+        if self.last_id == speaker_id:
+            self.last_id = None
 
     def name_of(self, speaker_id: int | None) -> str:
         sp = self.speakers.get(speaker_id) if speaker_id is not None else None

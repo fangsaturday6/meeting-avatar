@@ -26,6 +26,8 @@ async def make(replies=(), auto=True, brain_delay=0.0, worker=None, nudge=0.0):
     brain, mouth, player = FakeBrain(replies, brain_delay), FakeMouth(), FakePlayer(auto)
     floor = Floor(m, brain, mouth, player, worker)
     floor.listen_cap = floor.listen_cap_named = 0.05
+    floor.false_barge_wait = 0.05
+    floor.report_gap = 0.05
     player.floor = floor
     await floor.start()
     return m, brain, mouth, player, floor
@@ -1037,4 +1039,70 @@ async def test_real_dispatch_whose_brief_starts_with_a_negation_still_goes_out()
     await floor.on_utterance("小克，哪些接口不用登录就能访问", speaker_name="张三")
     await settle(lambda: worker.ran and player.played)
     assert worker.ran == [("查代码", "不用登录就能访问的接口有哪些")]
+    await floor.stop()
+
+
+async def test_this_part_is_kept_off_the_record():
+    m, brain, mouth, player, floor = await make(["[静]"] * 5)
+    await floor.on_utterance("这个先说一下", speaker_name="张三")
+    await floor.on_utterance("小克，这段别记", speaker_name="张三")
+    await settle(lambda: player.texts and m.status == "listening")
+    assert player.texts == ["好，这段不记。"] and not m.recording
+    await floor.on_utterance("工资是这个数", speaker_name="张三")         # 照样听得到、能接话，只是不进记录
+    await floor.on_utterance("可以记了", speaker_name="张三")
+    await settle(lambda: len(player.texts) == 2 and m.status == "listening")
+    assert player.texts[-1] == "好，接着记。" and m.recording
+    assert [(l.text, l.off) for l in m.lines] == [
+        ("这个先说一下", False), ("小克，这段别记", True), ("好，这段不记。", True), ("工资是这个数", True),
+        ("可以记了", True), ("好，接着记。", False)]
+    assert "这段别记" not in "".join(brain.prompts)                       # 这两句是对它的指令，不用大脑想
+    await floor.stop()
+
+
+
+async def test_a_noise_that_cut_it_off_is_followed_by_the_rest():
+    """咳嗽、挪椅子把它打断了，之后却没识别出任何话：过一会儿把没说完的接着说完。"""
+    m, brain, mouth, player, floor = await make(["先做登录。支付依赖它。上线前要压测。"], auto=False)
+    floor.false_barge_wait = 0.15
+    await floor.on_utterance("小克讲讲排期", speaker_name="张三")
+    await settle(lambda: len(player.played) == 3 and m.status == "speaking")
+    floor.on_clip_ended(player.played[0][0])
+    floor.on_speech_start()
+    await settle(lambda: player.stops == 1 and m.status == "listening")
+    floor.on_speech_end()
+    player.auto = True
+    await asyncio.sleep(0.08)
+    assert len(player.played) == 3                     # 先等一等：也许那句话的文字还在识别
+    await settle(lambda: len(player.played) > 3 and m.status == "listening")
+    assert player.texts[3:] == ["支付依赖它。", "上线前要压测。"]
+    assert len(brain.prompts) == 1 and any("杂音" in c for c in floor.carry)
+    await floor.stop()
+
+
+async def test_a_real_sentence_after_the_cut_is_not_talked_over():
+    m, brain, mouth, player, floor = await make(["先做登录。支付依赖它。", "好，你说。"], auto=False)
+    floor.false_barge_wait = 0.15
+    await floor.on_utterance("小克讲讲排期", speaker_name="张三")
+    await settle(lambda: len(player.played) == 2 and m.status == "speaking")
+    floor.on_speech_start()
+    await settle(lambda: player.stops == 1)
+    floor.on_speech_end()
+    player.auto = True
+    await floor.on_utterance("不对，先做支付", speaker_name="李四")    # 话在等的这会儿识别出来了
+    await settle(lambda: len(brain.prompts) == 2 and m.status == "listening")
+    await asyncio.sleep(0.25)
+    assert "支付依赖它。" not in player.texts[2:]
+    await floor.stop()
+
+
+async def test_a_finished_task_waits_for_a_proper_pause_before_reporting():
+    worker = FakeWorker(result=WorkResult(True, "接口文档在开放平台第三章。"), delay=0.01)
+    m, brain, mouth, player, floor = await make(["[[派工 查资料:飞书接口]]", "查到了，在第三章。"], worker=worker)
+    floor.report_gap = 0.4
+    await floor.on_utterance("查一下飞书接口", speaker_name="张三")
+    await settle(lambda: m.tasks and m.tasks[0].status == "done")
+    floor.on_speech_start(); floor.on_speech_end()     # 结果刚出来时有人说了句话
+    t0 = asyncio.get_event_loop().time()
+    await settle(lambda: "在第三章。" in "".join(player.texts), timeout=3)
+    assert asyncio.get_event_loop().time() - t0 >= 0.35   # 安静够久才开口，不插在两句话的缝里
     await floor.stop()

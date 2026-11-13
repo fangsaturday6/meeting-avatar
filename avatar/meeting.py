@@ -30,6 +30,8 @@ class Line:
     speaker: str = ""
     cut: bool = False        # 数字人这句话被打断了
     seconds: float = 0.0     # 这句话说了多久（听来的才有；打字的、数字人说的是 0）
+    pinned: bool = False     # 用户亲手把这句判给了某人：会后重新核对说话人时不动
+    off: bool = False        # 有人说了「这段别记」之后说的：照样听、照样接话，但不进会议记录、不录音
     at: float | None = None  # 这句话从录音的第几秒开始（听来的才有），对得回 workspace/audio/<会议编号>/ 里的声音
 
     def to_dict(self) -> dict:
@@ -75,6 +77,8 @@ class Meeting:
         self.mic_online = False                 # 那个窗口的麦克风声音确实在送过来（耳机断开时会停）
         self.mic_health = "ok"                  # ok | silent（送来的一直是数字静音：麦克风被关了、没权限）
         self.humans_speaking = False
+        self.private = False                    # 这场会不给智能体看（MCP、下一场会的背景、查会议都读不到）
+        self.recording = True                   # 有人说「这段别记」就是假，说「可以记了」再恢复
         self.started_at = 0.0
         self.board_task_id: int | None = None   # 资料板当前展示哪个任务
         self._subs: set[asyncio.Queue] = set()
@@ -114,6 +118,8 @@ class Meeting:
         self.started_at = time.time()
         self.ended_at = 0.0
         self.title = self.summary = self.polished = ""
+        self.private = False
+        self.recording = True
         self.record_id = self.archive.new_id(self.started_at) if self.archive else ""
         self.emit("snapshot", state=self.snapshot())
 
@@ -164,6 +170,14 @@ class Meeting:
             self.emit("settings", settings=self.settings.to_dict(), changed=changed)
         return changed
 
+    def set_recording(self, on: bool) -> None:
+        self.set_flag("recording", on)
+        self._save_soon()
+
+    def set_private(self, private: bool) -> None:
+        self.set_flag("private", private)
+        self.save()
+
     def set_flag(self, name: str, value: bool) -> None:
         if getattr(self, name) != value:
             setattr(self, name, value)
@@ -175,7 +189,7 @@ class Meeting:
         self._line_id += 1
         name = self.settings.name if who == "bot" else (self.speakers.name_of(speaker_id) if who == "human" else "")
         line = Line(id=self._line_id, t=time.time(), who=who, text=text, speaker_id=speaker_id, speaker=name,
-                    seconds=seconds, at=at)
+                    seconds=seconds, at=at, off=not self.recording)
         self.lines.append(line)
         self.emit("line", line=line.to_dict())
         self._save_soon()
@@ -190,6 +204,11 @@ class Meeting:
         self._save_soon()
 
     def rename_speaker(self, speaker_id: int, name: str) -> dict:
+        """改名。起的名字已经是另一位说话人的，说明两位是同一个人：并到那一位。"""
+        wanted = " ".join(name.split())
+        same = next((sp for sid, sp in self.speakers.speakers.items() if sid != speaker_id and sp.name == wanted), None)
+        if same is not None:
+            return self.merge_speakers(speaker_id, same.id)
         old = self.speakers.name_of(speaker_id)
         sp = self.speakers.rename(speaker_id, name)
         if self.polished and old != sp.name:    # 整理稿是成文的，行首的名字跟着改
@@ -201,6 +220,57 @@ class Meeting:
         self.emit("speaker", speaker=sp.to_dict())
         self._save_soon()
         return sp.to_dict()
+
+    def merge_speakers(self, src: int, dst: int) -> dict:
+        """src 其实就是 dst：句子全归 dst，src 不再出现。"""
+        sp = self.speakers.merge(src, dst)
+        sp.locked = True
+        for line in self.lines:
+            if line.who == "human" and line.speaker_id == src:
+                line.speaker_id, line.speaker = dst, sp.name
+        self.emit("snapshot", state=self.snapshot())
+        self._save_soon()
+        return sp.to_dict()
+
+    def reassign_line(self, line_id: int, speaker_id: int) -> Line:
+        """这一句其实是另一个人说的。之后会后重新核对也不会再改它。没有这句或这位时抛 KeyError。"""
+        line = next((l for l in self.lines if l.id == line_id and l.who == "human"), None)
+        if line is None or speaker_id not in self.speakers.speakers:
+            raise KeyError(line_id if line is None else speaker_id)
+        self.apply_speakers({line_id: speaker_id})
+        line.pinned = True
+        return line
+
+    def apply_speakers(self, changes: dict[int, int]) -> int:
+        """把这些句子改判给别的说话人（{行号: 说话人编号}，负数表示新建一位）。返回改了几句。
+
+        改完重数每位说了几句；一句都不剩、又没被起过名字的说话人去掉。
+        """
+        created: dict[int, int] = {}
+        n = 0
+        for line in self.lines:
+            if line.who != "human" or line.id not in changes:
+                continue
+            sid = changes[line.id]
+            if sid < 0:
+                sid = created.setdefault(sid, self.speakers._new().id)
+            if sid not in self.speakers.speakers or sid == line.speaker_id:
+                continue
+            line.speaker_id, line.speaker = sid, self.speakers.name_of(sid)
+            n += 1
+        if n:
+            counts = {sid: 0 for sid in self.speakers.speakers}
+            for line in self.lines:
+                if line.who == "human" and line.speaker_id in counts:
+                    counts[line.speaker_id] += 1
+            for sid, c in counts.items():
+                if c == 0 and not self.speakers.speakers[sid].locked:
+                    self.speakers.forget(sid)
+                elif sid in self.speakers.speakers:
+                    self.speakers.speakers[sid].count = c
+            self.emit("snapshot", state=self.snapshot())
+            self._save_soon()
+        return n
 
     # ---- 任务 ----
     def add_task(self, kind: str, brief: str) -> Task:
@@ -240,6 +310,8 @@ class Meeting:
             "mic_online": self.mic_online,
             "mic_health": self.mic_health,
             "humans_speaking": self.humans_speaking,
+            "private": self.private,
+            "recording": self.recording,
             "started_at": self.started_at,
             "record_id": self.record_id,
             "settings": self.settings.to_dict(),

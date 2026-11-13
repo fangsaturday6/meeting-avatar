@@ -191,11 +191,19 @@ cd app && npm install && npm run pack
     `workspace/glossary.txt`，直接改这个文件也行。
 - 没点「结束会议」就断掉的会（后台被重启、电脑合盖、当时没网）也不会漏：每次启动后台，
   它会把最近还没有纪要的会补上。
-- 会后给说话人改名，文件里的名字跟着改。
+- 会后给说话人改名，文件里的名字跟着改。给一位起了另一位的名字，就是告诉它这两位是同一个人：两位并成一位。
+- 散会后、整理纪要之前，它拿整场的声纹重新核对一遍是谁说的（会上只能逐句认，常把一个人拆成几位）：
+  够长的句子定有几个人，短句跟着最像的走，拿不准的不动；你改过名的说话人、单独改判过的句子也不动。
+- 纪要里的结论、待办、没定的事每条后面带出处时刻（`（10:02:30）`），在阅读页点它跳到那段对话；
+  记录里没有的时刻会被去掉，不会留下编出来的出处。
 - **录音**另存在 `workspace/audio/<会议编号>/`，和记录同名：原始声音每 60 秒一块（`mic-0000.wav` …，16k 单声道），
   `heard.jsonl` 是每句识别结果（从录音第几秒开始、多长、认成了谁、声纹），`timeline.jsonl` 记着哪里丢过声音。
-  进程被杀最多丢最后一秒，下次启动自动补封。设置窗口的「录音」选留多久：一直留着（默认）/ 整理完就删 / 不留；
-  删的只是声音，文字和声纹总是留着。留着录音，以后才能会后重算说话人、拿真实的会比较识别参数。
+  进程被杀最多丢最后一秒，下次启动自动补封。设置窗口的「录音」选留多久：留 2 小时（默认，从散会算起）/ 一直留着 /
+  整理完就删 / 不留；删的只是声音，文字和声纹总是留着。要拿真实的会比较识别参数，先改成「一直留着」。
+- 开会时它先说一句「这场会我会记录下来」（设置里可以关），在场的人都知道有人在记。
+- 会上说「这段别记」，它应一声「好，这段不记」，之后的话照样听、照样能接，但不进记录、不录音（文件里只留一行
+  「这段按要求没有记录」）；说「可以记了」恢复。不记的时候主窗口的状态后面带「这段不记」，设置窗口里那几句是浅色的。
+  整句就是这个意思才算，「你别记错了」不算。
 - 设置窗口的「记录」里，没开会时列的就是以前的会议，点一条就在窗口里读；可以重新整理纪要、复制文件路径。
 
 ### 让你自己的 AI 读会议
@@ -216,13 +224,18 @@ cd app && npm install && npm run pack
 uv run python -m avatar.connect
 ```
 
-接上之后有三个工具：
+接上之后有四个工具：
 
 | 工具 | 作用 |
 |---|---|
 | `list_meetings` | 最近的会议：时间、时长、标题、说话人、有没有纪要、文件路径 |
 | `read_meeting` | 读一场会（默认最近一场）；可以只要纪要、只要整理稿或只要逐句对话；长会分页读。正在开的会也读得到 |
+| `read_since` | 读一场会某个时刻之后的新对话，结尾给下一次用的 `after`；会还开着时隔一会儿来看看又说了什么 |
 | `search_meetings` | 在所有会议里搜关键词 |
+
+阅读页标题旁的锁形按钮（`#btn-private`）把一场会设成「不给智能体看」：列表里只剩编号和时间，读和搜都碰不到它，
+下一场会的开场背景、会上的「查会议」也不带它。直接请求 HTTP 接口读不受这个限制（设置窗口自己就靠它读），
+写给智能体的接入说明里请它们跳过 `private` 为真的场次。
 
 登记给 Claude Code 和 Codex 的是本地命令方式，直接读文件，后台没在运行也能用。取消登记：关掉开关，或者
 `uv run python -m avatar.connect --remove`。工具只能读；要让智能体重新整理纪要，调 `POST /api/meetings/{id}/minutes`。
@@ -240,20 +253,23 @@ uv run python -m avatar.connect
 | POST | `/api/say` `{text}` | 让数字人直接念一句话 |
 | POST | `/api/hush` | 让它立刻停下 |
 | POST | `/api/mute` `{muted}` | 静音：只听不说 |
-| PATCH | `/api/speakers/{id}` `{name}` | 说话人改名 |
+| POST | `/api/record` `{on}` | 「这段别记」（`on: false`）/「可以记了」（`on: true`）：不记的时候照样听、照样接话，但说的话不进会议记录、不录音。会上直接说这两句话效果一样，它会应一声 |
+| PATCH | `/api/speakers/{id}` `{name}` | 说话人改名。起的名字已经是另一位说话人的，就是说两位是同一个人：并成一位，句子全归过去。改过名的说话人散会后核对时不动 |
+| PATCH | `/api/lines/{id}` `{speaker_id}` | 这一句其实是另一位说的。改过的句子散会后核对时不动 |
 | POST | `/api/tasks` `{kind, brief}` | 直接派后台任务，kind 为 查资料 / 查代码 / 查会议 / 做设计 |
 | POST | `/api/board` `{task_id}` | 选择资料板显示哪个任务，`null` 为收起 |
 | PATCH | `/api/settings` | 改设置，字段见下表 |
 | GET | `/api/figures` | `avatar/web/models/` 里有哪些 3D 形象文件，各带了哪些状态的动作文件 |
 | GET | `/api/meetings` | 会议记录列表，新的在前：编号、起止时间、标题、句数、说话人、有没有纪要、文件路径 |
 | GET | `/api/meetings/{id}` | 一场会的完整内容（Markdown 文本）；`id` 写 `latest` 是最近一场 |
+| PATCH | `/api/meetings/{id}` `{private}` | 这场会给不给智能体看（见「让你自己的 AI 读会议」）；列表里每场有 `private` |
 | POST | `/api/meetings/{id}/minutes` | 整理（或重新整理）这场会的纪要和整理稿，后台进行。纪要好了事件流里有 `minutes` 事件；整理稿晚一些，补进记录后再发一次 `meetings` 事件 |
 | GET | `/api/agents` | 会议记录接给了哪些智能体：`clients` 里每个有 `id`（`claude` / `codex`）和 `state`（`on` 已接上 / `off` 没接 / `missing` 没装 / `taken` 那边有个同名的别的服务 / `unknown` 没能确认）；`guide` 是写给别的智能体看的接入说明，`mcp`、`api` 是其中的地址。要去问本机的 Claude Code 和 Codex，会花一两秒 |
 | PUT | `/api/agents/{id}` `{connected}` | 把会议记录接给这个智能体，或者取消。动不了时回 409 和原因。成了之后事件流里有 `agents` 事件 |
 | GET | `/api/glossary` | 常用词表：`text` 是原文（一行一个词，后面可以跟「：说明」，`#` 开头是注释），`count` 是里面有几个词 |
 | PUT | `/api/glossary` `{text}` | 把整张词表换成这段文字。成了之后事件流里有 `glossary` 事件（带新的 `text`、`count`） |
 | POST | `/api/glossary/import` `{text, name?}` | 把一份名单并进词表，只追加还没有的词，回的 `added` 是新加了几个。`name` 是文件名，按后缀认格式：`.csv` / `.tsv` 表格、`.yaml` 公司本体，其余（或不写）当一行一个。读不懂回 400 和原因 |
-| POST | `/mcp` | HTTP 方式的 MCP（一问一答，回 JSON），工具和登记给 Claude Code 的那套一样：`list_meetings`、`read_meeting`、`search_meetings`，都是只读的 |
+| POST | `/mcp` | HTTP 方式的 MCP（一问一答，回 JSON），工具和登记给 Claude Code 的那套一样：`list_meetings`、`read_meeting`、`read_since`、`search_meetings`，都是只读的 |
 | WS | `/ws/events` | 状态事件流，连接后先收到全量快照 |
 | WS | `/ws/audio` | 主窗口的音频通道（同一时间只有一个窗口负责收音和播放）。送上来的声音帧是 `PCM1` + 4 字节小端序号 + 16k 单声道 16 位 PCM（每包 40 毫秒）；序号跳了说明中间有声音没送到。没有帧头的整包当声音 |
 
@@ -272,6 +288,8 @@ uv run python -m avatar.connect
 | `#settings` 里带 `name` 的每一项、每一组几选一（`data-setting`） | `PATCH /api/settings` |
 | 「记录」里的 `#btn-meetings`、`.meeting[data-meeting-id]` | `GET /api/meetings`、`GET /api/meetings/{id}` |
 | `#btn-minutes` 整理纪要 | `POST /api/meetings/{id}/minutes` |
+| `#btn-private` 不给智能体看（`aria-pressed` 是现在设没设） | `PATCH /api/meetings/{id}` |
+| 纪要里每条后面的时刻 `button.cite[data-clock]` | 只是跳到那段对话，不改状态 |
 | `#glossary-text` 常用词（离开输入框就存；`#glossary-count` 是词数） | `GET /api/glossary`、`PUT /api/glossary` |
 | `#btn-glossary-import` 导入文件（选文件的是 `#glossary-file`） | `POST /api/glossary/import`，一个文件一次 |
 | `#agent-claude`、`#agent-codex` 开关（`aria-checked` 是接没接上） | `PUT /api/agents/{id}` |
@@ -295,13 +313,14 @@ uv run python -m avatar.connect
 | `project_dir`、`projects_root` | 这场会聊的项目、所有项目所在的目录 | `set-project`、`set-projects-root` |
 | `topic` | 会议背景 | `set-topic` |
 | `voice`、`speed` | 嗓音、语速 | `set-voice`、`set-speed` |
-| `keep_audio` | 录音留多久：`always` 一直留着 / `until_polished` 整理稿写好就删 / `never` 不留（取值也在 `/api/state` 的 `keep_audio_options` 里） | `set-keep-audio` |
+| `keep_audio` | 录音留多久：`two_hours` 散会后留 2 小时（默认）/ `always` 一直留着 / `until_polished` 整理稿写好就删 / `never` 不留（取值也在 `/api/state` 的 `keep_audio_options` 里） | `set-keep-audio` |
+| `announce` | 开会时先说一句「这场会我会记录下来」，替我开会时说清是谁的 AI，默认 `true` | `set-announce` |
 
 `/api/state` 里的 `projects` 是它认出来的项目，`minuting` 是正在整理纪要的会议。
 `stage_online` 是有没有窗口接通了声音，`mic_online` 是那个窗口的麦克风声音有没有真的送到后台：
 开着会、`stage_online` 为真而 `mic_online` 为假，就是它现在只能说、听不到（耳机断开、麦克风被拔掉），
 主窗口会自己重新接麦克风，接不上时在顶部提示（`#btn-mic-retry` 重试）。
-`mic_health` 为 `silent` 是声音在送、但一直是数字静音（麦克风被关了、没给权限），同样算听不到；只在当面开会时判断，
+`recording` 为假是有人说了「这段别记」。`mic_health` 为 `silent` 是声音在送、但一直是数字静音（麦克风被关了、没给权限），同样算听不到；只在当面开会时判断，
 线上会议走虚拟声卡，没人说话时本来就是静音。事件流里这三项都走 `flag` 事件。
 字幕行（`lines`）里听来的话带 `at`：从这场会录音的第几秒开始。
 
@@ -312,6 +331,7 @@ uv run python -m avatar.connect
 | `avatar/floor.py` | 发言决策：什么时候想、什么时候开口、什么时候让话 |
 | `avatar/ears.py` | 断句、识别（顺手挡掉杂音）、声纹；每句话记下它在录音里的位置 |
 | `avatar/audio_in.py`、`recorder.py` | 声音的入口：解帧、计时、看是不是一直静音、交给识别；录音分块落盘、保留策略 |
+| `avatar/recluster.py` | 会后重聚类：散会后拿整场的声纹重新分一次是谁说的，结果交给 `Meeting.apply_speakers` |
 | `avatar/replay.py` | 重放评测台：拿存下来的录音喂给真实的耳朵，和会上听到的、和另一套参数逐句比 |
 | `avatar/fast_brain.py` | 快脑：常驻的 Claude Haiku，负责接话。它怎么说话全在这个文件的提示词里 |
 | `avatar/slow_brain.py` | 慢脑：按需启动本机 Claude Code 干活、会后整理纪要和整理稿 |

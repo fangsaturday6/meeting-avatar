@@ -33,6 +33,7 @@ class AudioIn:
         self.samples = 0                 # 这场会录到第几个采样（录音时钟）
         self._seq: int | None = None
         self._zeros = 0                  # 连续多少个采样是 0
+        self._on = True                  # 在不在录（「这段别记」时不录）
 
     # ---- 声音 ----
     def feed(self, data: bytes) -> None:
@@ -42,7 +43,10 @@ class AudioIn:
         if seq is not None:
             self._check_seq(seq)
         self._watch(pcm)
-        if self._rec:
+        if self.m.recording != self._on:
+            self._on = self.m.recording
+            self._event("on" if self._on else "off")      # 「这段别记」：照样听，只是不录
+        if self._rec and self._on:
             self._rec.write(pcm)
         self.ears.feed(pcm, clock=self.samples)
         self.samples += len(pcm) // 2
@@ -96,7 +100,7 @@ class AudioIn:
             if self.m.settings.keep_audio == "never":
                 self.store.drop_audio(self._rec_id)
         self._rec, self._rec_id = None, ""
-        self.samples, self._seq, self._zeros = 0, None, 0
+        self.samples, self._seq, self._zeros, self._on = 0, None, 0, True
         if self.m.mic_health != "ok":
             self.m.set_flag("mic_health", "ok")
 
@@ -107,7 +111,7 @@ class AudioIn:
     # ---- 听到的话 ----
     def heard(self, text: str, emb, seconds: float, at: float | None, line: "Line | None") -> None:
         """记一句识别结果：在录音里的位置、文字、归给了谁、声纹。line 为空说明被判成了回声。"""
-        if not self._rec:
+        if not self._rec or not self.m.recording or (line is not None and line.off):
             return
         self._rec.heard({
             "at": None if at is None else round(at, 3),

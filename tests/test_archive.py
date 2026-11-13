@@ -266,3 +266,53 @@ def test_polished_transcript_can_be_added_to_an_old_record(tmp_path):
     assert archive.polished_of(text) == "[10:00:00] 张三：先做登录。" and archive.minutes_of(text) == "- 先做登录"
     assert a.set_minutes(m.record_id, "登录排期", "- 先做登录")          # 再整理一次、这次没有整理稿
     assert "## 整理稿" not in a.read(m.record_id) and archive.minutes_of(a.read(m.record_id)) == "- 先做登录"
+
+
+def test_citations_in_minutes_must_point_at_a_real_line():
+    from avatar.archive import checked_citations
+    dialogue = "[10:00:05] 张三：先做登录\n\n[10:02:30] 李四：接口我来写\n"
+    summary = ("### 结论\n- 先做登录（10:00:05）\n- 接口李四写 (10:02:30)\n- 下周上线（10:09:59）\n"
+               "### 待办\n- 李四：写接口（10:02:30、10:00:05）")
+    out = checked_citations(summary, dialogue)
+    assert "- 先做登录（10:00:05）" in out and "- 接口李四写（10:02:30）" in out
+    assert "- 下周上线\n" in out                                     # 记录里没有这个时刻：编出来的出处去掉
+    assert "- 李四：写接口（10:02:30、10:00:05）" in out
+
+
+def test_private_meetings_are_marked_and_skipped_for_the_next_one(tmp_path):
+    from avatar.config import Settings
+    from avatar.meeting import Meeting
+    a = Archive(tmp_path)
+    m = Meeting(Settings(), a)
+    m.reset()
+    m.add_line("human", "这个先别外传", m.speakers.by_name("张三"))
+    m.set_private(True)
+    m.set_minutes("保密的事", "### 结论\n- 先别外传")
+    row = a.recent()[0]
+    assert row["private"] is True and a.last_minutes() == ""        # 下一场会的开场背景里不带它
+    assert a.set_private(row["id"], False) and a.recent()[0]["private"] is False
+    assert "保密的事" in a.last_minutes()
+    view = a.public_copy(tmp_path / "view")
+    assert [p.name for p in view.glob("*.md")] == [f"{row['id']}.md"]
+    a.set_private(row["id"], True)
+    assert list(a.public_copy(tmp_path / "view").glob("*.md")) == []
+
+
+def test_off_the_record_lines_never_reach_the_file(tmp_path):
+    from avatar.config import Settings
+    from avatar.meeting import Meeting
+    a = Archive(tmp_path)
+    m = Meeting(Settings(), a)
+    m.reset()
+    sid = m.speakers.by_name("张三")
+    m.add_line("human", "先说预算", sid)
+    m.set_recording(False)
+    m.add_line("human", "工资是这个数", sid)
+    m.add_line("bot", "好的。")
+    m.set_recording(True)
+    m.add_line("human", "接着说排期", sid)
+    m.save()
+    text = a.read(m.record_id)
+    assert "工资" not in text and "好的。" not in text
+    assert text.count("（这段按要求没有记录）") == 1 and text.index("先说预算") < text.index("没有记录") < text.index("排期")
+    assert a.recent()[0]["lines"] == 2

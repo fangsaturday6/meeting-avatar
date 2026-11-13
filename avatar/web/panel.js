@@ -68,7 +68,8 @@ function lineRows(lines, rename = false) {
     const name = same ? '<span class="who"></span>'
       : rename && l.who === 'human' ? `<button class="who" type="button" data-speaker-id="${l.speaker_id}" aria-label="给${esc(l.speaker)}改名">${esc(l.speaker)}</button>`
       : `<span class="who">${esc(l.speaker)}</span>`;
-    return `<li class="line ${esc(l.who)}${same ? ' same' : ''}"${l.id === undefined ? '' : ` data-line-id="${l.id}"`}>${name}
+    const attrs = (l.id === undefined ? '' : ` data-line-id="${l.id}"`) + (l.clock ? ` data-clock="${esc(l.clock)}"` : '');
+    return `<li class="line ${esc(l.who)}${same ? ' same' : ''}${l.off ? ' off' : ''}"${attrs}>${name}
       <span class="text">${esc(l.text)}${l.cut ? '<span class="cut">被打断</span>' : ''}</span></li>`;
   }).join('');
 }
@@ -163,8 +164,8 @@ function parseRecord(text) {
     const j = to ? rest.indexOf(`\n## ${to}\n`) : -1;
     return (j < 0 ? rest : rest.slice(0, j)).trim();
   };
-  const rows = (part) => part.split('\n').map((l) => l.match(/^\[(\d\d:\d\d):\d\d\] ([^：]+)：(.*?)(（被打断）)?$/)).filter(Boolean)
-    .map((m) => ({ who: m[2] === meta.bot ? 'bot' : 'human', speaker: m[2], text: m[3], cut: !!m[4] }));
+  const rows = (part) => part.split('\n').map((l) => l.match(/^\[(\d\d:\d\d:\d\d)\] ([^：]+)：(.*?)(（被打断）)?$/)).filter(Boolean)
+    .map((m) => ({ clock: m[1], who: m[2] === meta.bot ? 'bot' : 'human', speaker: m[2], text: m[3], cut: !!m[4] }));
   // 有整理稿（会后书面化的对话）就看整理稿，逐句原话留在文件里对照
   const polished = rows(between('整理稿', '对话'));
   return {
@@ -188,6 +189,8 @@ function renderReader() {
   $('btn-minutes').hidden = !!(info && info.state === 'live');
   $('btn-minutes').disabled = !!busy;
   $('btn-minutes').textContent = busy ? '正在整理…' : rec.minutes ? '重新整理纪要' : '整理纪要';
+  $('btn-private').hidden = !row;
+  $('btn-private').setAttribute('aria-pressed', row && row.private ? 'true' : 'false');
   $('btn-copy-path').textContent = r.copied ? '已复制' : '复制路径';
   $('btn-copy-path').disabled = !row;
   const failed = state.minutes_result && state.minutes_result.id === r.id ? state.minutes_result.state : '';
@@ -197,9 +200,26 @@ function renderReader() {
     : failed === 'empty' || (row && row.minutes === 'none') ? '这场会没有可以整理的实质内容' : '';
   $('reader-body').innerHTML = `
     ${note ? `<p id="reader-note">${note}</p>` : ''}
-    ${rec.minutes ? `<section id="reader-minutes" class="md">${renderMarkdown(rec.minutes)}</section>` : ''}
+    ${rec.minutes ? `<section id="reader-minutes" class="md">${citeButtons(renderMarkdown(rec.minutes))}</section>` : ''}
     <ol id="reader-lines">${lineRows(rec.lines)}</ol>
     ${rec.tasks ? `<section id="reader-tasks" class="md">${renderMarkdown(rec.tasks)}</section>` : ''}`;
+}
+
+// 纪要每条后面的（10:02:30）是出处：变成可以点的时刻，点了跳到那段对话
+function citeButtons(html) {
+  return html.replace(/（((?:\d\d:\d\d:\d\d)(?:、\d\d:\d\d:\d\d)*)）/g, (_, list) => list.split('、')
+    .map((t) => `<button class="cite" type="button" data-clock="${t}" aria-label="看 ${t} 的原话">${t.slice(0, 5)}</button>`).join(''));
+}
+
+// 跳到这个时刻的那段对话（没有正好这一刻的，就跳到它之前最近的一段）
+function showClock(clock) {
+  const rows = [...document.querySelectorAll('#reader-lines li[data-clock]')];
+  const row = rows.filter((li) => li.dataset.clock <= clock).pop() || rows[0];
+  if (!row) return;
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  row.classList.remove('flash');
+  void row.offsetWidth;
+  row.classList.add('flash');
 }
 
 async function loadReader() {
@@ -242,6 +262,7 @@ function renderSettings() {
   set('set-keep-audio', s.keep_audio);
   set('set-project', s.project_dir); set('set-projects-root', s.projects_root); set('set-topic', s.topic);
   $('set-skills').checked = !!s.use_my_skills;
+  $('set-announce').checked = !!s.announce;
   // 替我开会时默认只谈这场会的项目；要不要放开由主人自己定
   $('open-book-row').hidden = s.role !== 'delegate';
   $('set-open-book').checked = !!s.open_book;
@@ -453,10 +474,21 @@ $('meetings').addEventListener('click', (e) => {
   if (a.dataset.state === 'live') show('live'); else openReader(a.dataset.meetingId);
 });
 $('btn-reader-close').addEventListener('click', closeReader);
+$('reader-body').addEventListener('click', (e) => {
+  const cite = e.target.closest('button.cite');
+  if (cite) showClock(cite.dataset.clock);
+});
 $('btn-minutes').addEventListener('click', async () => {
   const id = ui.reader.id;
   const r = await api.makeMinutes(id);      // 进行到哪了由事件流告诉我们，这里只管报错
   if (ui.reader.id !== id) return;
+  ui.reader.error = r.ok ? '' : r.message;
+  renderReader();
+});
+$('btn-private').addEventListener('click', async () => {
+  const row = state.meetings.find((m) => m.id === ui.reader.id);
+  if (!row) return;
+  const r = await api.setPrivate(row.id, !row.private);     // 新的列表由事件流送来
   ui.reader.error = r.ok ? '' : r.message;
   renderReader();
 });

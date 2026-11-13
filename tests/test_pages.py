@@ -14,9 +14,9 @@ STAGE_IDS = ["stage", "avatar", "avatar-grip", "status-text", "ai-tag", "board",
              "btn-notes", "btn-settings"]
 PANEL_IDS = ["panel", "tab-notes", "tab-settings", "alerts", "btn-meetings", "tasks", "transcript", "composer", "say-kind",
              "say-text", "btn-send", "composer-error", "meetings", "reader", "reader-title", "reader-sub", "btn-reader-close",
-             "btn-minutes", "btn-copy-path", "reader-body", "settings", "engagement", "set-topic", "set-role", "open-book-row",
+             "btn-private", "btn-minutes", "btn-copy-path", "reader-body", "settings", "engagement", "set-topic", "set-role", "open-book-row",
              "set-open-book", "set-scene", "set-project", "set-projects-root", "projects-count", "set-name", "set-owner",
-             "set-voice", "set-speed", "set-skills", "mic-select", "speaker-select", "set-keep-audio", "settings-error",
+             "set-voice", "set-speed", "set-skills", "set-announce", "mic-select", "speaker-select", "set-keep-audio", "settings-error",
              "glossary", "glossary-count", "glossary-text", "btn-glossary-import", "glossary-file", "glossary-error",
              "agents", "agent-claude", "agent-codex", "btn-copy-agent-guide", "agents-error"]
 
@@ -84,8 +84,9 @@ def test_demo_meeting_runs_without_models(client, tmp_path):
     assert client.get("/api/state").json()["ready"] == {"ears": True, "speakers": True, "local_voice": True}
     assert client.post("/api/meeting/start").json()["status"] == "listening"
     client.post("/api/utterance", json={"speaker": "李工", "text": "小克你怎么看"})
-    st = wait_for(client, lambda s: any(l["who"] == "bot" for l in s["lines"]) and s["status"] == "listening")
-    assert st["lines"][0]["speaker"] == "李工"
+    st = wait_for(client, lambda s: sum(l["who"] == "bot" for l in s["lines"]) >= 2 and s["status"] == "listening")
+    assert st["lines"][0]["who"] == "bot" and "记录" in st["lines"][0]["text"]     # 开场先说一句会做记录
+    assert next(l for l in st["lines"] if l["who"] == "human")["speaker"] == "李工"
 
     client.post("/api/utterance", json={"speaker": "张总", "text": "那出一版登录页看看"})
     st = wait_for(client, lambda s: s["tasks"] and s["tasks"][0]["status"] == "done")

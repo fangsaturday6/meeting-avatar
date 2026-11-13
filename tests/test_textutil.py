@@ -237,3 +237,13 @@ def test_english_self_talk_is_held_back_while_streaming():
     assert without_selftalk("Wait — let me think", final=False) == ("", True)
     # 自言自语之后没有一句干净的中文：什么都不念
     assert without_selftalk("No wait — let me reconsider.\nJust the refusal.")[0].strip() == ""
+
+
+def test_off_the_record_commands_are_recognised_only_when_that_is_the_whole_sentence():
+    from avatar.textutil import record_command
+    for t in ("这段别记。", "下面的先不要记了", "小克，这段别记录", "好，接下来不用记了啊", "先别录"):
+        assert record_command(t, "小克") is False, t
+    for t in ("可以记了。", "小克继续记吧", "好，接着记", "恢复记录"):
+        assert record_command(t, "小克") is True, t
+    for t in ("你别记错了", "这段别记得太细", "我记了", "可以记一下这个数字吗", "继续讨论"):
+        assert record_command(t, "小克") is None, t

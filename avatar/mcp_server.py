@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -43,6 +44,14 @@ TOOLS = [
                        "description": "从第几个字开始读，默认 0。长会一次读不完时，结尾会告诉你下一次的 offset"}}},
     },
     {
+        "name": "read_since",
+        "description": "读一场会某个时刻之后的新对话（一段一行，带时刻）。会还开着时隔一会儿来看看又说了什么，"
+                       "结尾会给下一次用的 after。",
+        "inputSchema": {"type": "object", "properties": {
+            "id": {"type": "string", "description": "会议编号；不填或填 latest 是最近一场（正在开的就是它）"},
+            "after": {"type": "string", "description": "只要这个时刻之后的，格式 HH:MM:SS；不填从头读"}}},
+    },
+    {
         "name": "search_meetings",
         "description": "在所有会议记录里搜关键词，返回命中的句子和它所在的会议。多个词用空格隔开，要求同一句里都出现。",
         "inputSchema": {"type": "object", "required": ["query"], "properties": {
@@ -50,6 +59,22 @@ TOOLS = [
             "limit": {"type": "integer", "description": "最多返回几条，默认 30", "minimum": 1, "maximum": 200}}},
     },
 ]
+
+
+HIDDEN = "这场会主人设了「不给智能体看」，不能读。"
+
+
+def _resolve(archive: Archive, meeting_id: str) -> tuple[str, str]:
+    """会议编号 → (编号, 全文)。latest 是最近一场。没有、或者不给看时抛 ValueError。"""
+    meeting_id = str(meeting_id or "latest").strip()
+    if meeting_id == "latest":
+        meeting_id = next((r["id"] for r in archive.recent(1)), "")
+    text = archive.read(meeting_id) if meeting_id else None
+    if text is None:
+        raise ValueError("没有这场会议的记录。先用 list_meetings 看有哪些。")
+    if (archive.meta(meeting_id) or {}).get("private"):
+        raise ValueError(HIDDEN)
+    return meeting_id, text
 
 
 def _when(t: float) -> str:
@@ -62,6 +87,9 @@ def list_meetings(archive: Archive, limit: int = 10) -> str:
         return "还没有任何会议记录。"
     out = []
     for r in rows:
+        if r["private"]:
+            out.append(f"- {r['id']}｜{_when(r['started_at'])}｜不给智能体看")
+            continue
         minutes = max(1, round((r["ended_at"] - r["started_at"]) / 60)) if r["started_at"] and r["ended_at"] else 0
         state = {"yes": "有纪要", "none": "无实质内容"}.get(r["minutes"], "还没整理纪要")
         out.append(
@@ -83,12 +111,7 @@ def _page(text: str, offset: int) -> str:
 
 
 def read_meeting(archive: Archive, id: str = "latest", part: str = "all", offset: int = 0) -> str:  # noqa: A002
-    meeting_id = str(id or "latest").strip()
-    if meeting_id == "latest":
-        meeting_id = next((r["id"] for r in archive.recent(1)), "")
-    text = archive.read(meeting_id) if meeting_id else None
-    if text is None:
-        raise ValueError("没有这场会议的记录。先用 list_meetings 看有哪些。")
+    _, text = _resolve(archive, id)
     if part == "minutes":
         return minutes_of(text) or "这场会还没有纪要。可以读 dialogue 自己归纳。"
     if part == "polished" and polished_of(text):
@@ -98,6 +121,25 @@ def read_meeting(archive: Archive, id: str = "latest", part: str = "all", offset
     return _page(text, offset)
 
 
+def read_since(archive: Archive, id: str = "latest", after: str = "") -> str:  # noqa: A002
+    after = str(after or "").strip()
+    if after and not re.fullmatch(r"\d\d:\d\d:\d\d", after):
+        raise ValueError("after 要写成 HH:MM:SS，比如 10:02:30。")
+    _, text = _resolve(archive, id)
+    rows = [l for l in dialogue_of(text).splitlines() if re.match(r"^\[\d\d:\d\d:\d\d\] ", l) and l[1:9] > after]
+    out, size = [], 0
+    for l in rows:
+        if size + len(l) > PAGE and out:
+            break
+        out.append(l)
+        size += len(l) + 1
+    cursor = out[-1][1:9] if out else after
+    tail = f"（下次接着读：after={cursor}）"
+    if not out:
+        return f"{after} 之后还没有新的话。{tail}" if after else f"这场会还没有人说话。{tail}"
+    return "\n".join(out) + "\n\n" + tail
+
+
 def search_meetings(archive: Archive, query: str, limit: int = 30) -> str:
     terms = [t.lower() for t in str(query or "").split() if t]
     if not terms:
@@ -105,6 +147,8 @@ def search_meetings(archive: Archive, query: str, limit: int = 30) -> str:
     limit = max(1, min(int(limit or 30), 200))
     hits: list[str] = []
     for r in archive.recent(500):
+        if r["private"]:
+            continue
         text = archive.read(r["id"]) or ""
         body = text.partition("\n---\n")[2]
         found = [l.strip() for l in body.splitlines() if l.strip() and all(t in l.lower() for t in terms)]
@@ -117,7 +161,8 @@ def search_meetings(archive: Archive, query: str, limit: int = 30) -> str:
     return "\n".join(hits) if hits else "没有搜到。语音识别有错字，换个说法或同音字再试。"
 
 
-HANDLERS = {"list_meetings": list_meetings, "read_meeting": read_meeting, "search_meetings": search_meetings}
+HANDLERS = {"list_meetings": list_meetings, "read_meeting": read_meeting, "read_since": read_since,
+            "search_meetings": search_meetings}
 
 
 def handle(msg: dict, archive: Archive) -> dict | None:

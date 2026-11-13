@@ -62,9 +62,11 @@ async def test_past_meetings_are_searched_in_the_records_folder(brain, tmp_path)
     assert not res.ok and res.text == "还没有以前的会议记录" and brain.calls == []
     (tmp_path / "meetings").mkdir()
     (tmp_path / "meetings" / "2026-11-10_100000.md").write_text("x", encoding="utf-8")
+    (tmp_path / "meetings" / "2026-11-11_100000.md").write_text("---\nprivate: yes\n---\n保密", encoding="utf-8")
     assert (await brain.run(Task(2, "查会议", "上次怎么定的"), lambda p: None)).ok
     call = brain.calls[0]
-    assert call["cwd"] == tmp_path / "meetings" and "上次怎么定的" in call["cmd"][2]
+    assert call["cwd"] == tmp_path / "meetings-public" and "上次怎么定的" in call["cmd"][2]
+    assert [p.name for p in call["cwd"].glob("*.md")] == ["2026-11-10_100000.md"]     # 不给智能体看的那场不在里面
     assert arg(call["cmd"], "--tools") == ["Read,Grep,Glob"]
 
 

@@ -271,6 +271,24 @@ def is_backchannel(text: str) -> bool:
     return 0 < len(n) <= 6 and bool(_BACKCHANNEL.fullmatch(n))
 
 
+_LEAD = r"(?:好|好的|那|那个|嗯|行)?"
+_OFF_RECORD = re.compile(_LEAD + r"(?:这段|这一段|这部分|这个|下面|下面的|接下来|接下来的|后面的|后面)?(?:先)?"
+                         r"(?:别|不要|不用|甭)(?:记|记录|录)(?:了|下来|进去)?(?:啊|哈|吧|哦|啦)?")
+_ON_RECORD = re.compile(_LEAD + r"(?:可以|继续|接着|恢复|开始)(?:记|记录|录)(?:了|吧|啦)?(?:啊|哈)?")
+
+
+def record_command(text: str, name: str = "") -> bool | None:
+    """「这段别记」→ False，「可以记了」→ True，别的话 → None。整句就是这个意思才算，「你别记错了」不算。"""
+    n = _norm(text)
+    if name and n.startswith(_norm(name)):
+        n = n[len(_norm(name)):]
+    if _OFF_RECORD.fullmatch(n):
+        return False
+    if _ON_RECORD.fullmatch(n):
+        return True
+    return None
+
+
 def fix_name(text: str, name: str) -> str:
     """把语音识别写错的名字改回来：读音相同的字（小课、小柯、小可……）都当作在叫「小克」。"""
     n = len(name)

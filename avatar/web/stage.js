@@ -59,7 +59,7 @@ function renderScene() {
   $('ai-tag').hidden = !(owner && state.settings.role === 'delegate');
   $('ai-tag').textContent = `${owner}的 AI`;
   const doing = deaf() ? '听不到' : state.muted && isActive() ? '已静音' : STATUS_TEXT[state.status] || '';
-  $('status-text').textContent = `${name}：${doing}`;
+  $('status-text').textContent = `${name}：${doing}${isActive() && !state.recording ? ' · 这段不记' : ''}`;
 }
 
 function renderBoard() {

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
 import struct
 import time
+from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,17 +17,19 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+import numpy as np
 from pydantic import BaseModel, Field
 
 from . import connect, glossary, knowledge, mcp_server, models
-from .archive import NO_CONTENT, Archive, dialogue_of, split_minutes
+from .archive import NO_CONTENT, Archive, checked_citations, dialogue_of, split_minutes
 from .audio_in import AudioIn
-from .config import DESIGN_DIR, ENGAGEMENTS, KEEP_AUDIO, ROLES, SCENES, VOICES, Settings
+from .config import DESIGN_DIR, ENGAGEMENTS, KEEP_AUDIO, KEEP_HOURS, ROLES, SCENES, VOICES, Settings
 from .ears import Ears
 from .fast_brain import FastBrain
 from .floor import Floor
 from .meeting import Meeting
 from .mouth import Mouth
+from .recluster import Item, recluster
 from .recorder import AudioStore
 from .slow_brain import SlowBrain
 from .textutil import TASK_KINDS
@@ -140,6 +144,35 @@ class Hub:
             self.audio.heard(text, embedding, seconds, at, line)
         return line
 
+    async def recheck_speakers(self) -> int:
+        """散会后拿整场的声纹重新分一次是谁说的（recluster.py），改完再整理纪要。返回改了几句。"""
+        m = self.meeting
+        if not m.record_id or m.active:
+            return 0
+        rows = await asyncio.to_thread(self.audio_store.rows, m.record_id, "heard")
+        heard = {r["line_id"]: r for r in rows if r.get("line_id") and r.get("emb")}
+        items = []
+        for line in m.lines:
+            row = heard.get(line.id)
+            if line.who != "human" or row is None:
+                continue
+            sp = m.speakers.speakers.get(line.speaker_id)
+            items.append(Item(line.id, float(row.get("seconds") or line.seconds),
+                              np.frombuffer(base64.b64decode(row["emb"]), dtype=np.float32), line.speaker_id,
+                              fixed=line.pinned or bool(sp and sp.locked)))
+        try:
+            changes = await asyncio.to_thread(recluster, items)
+        except Exception:  # noqa: BLE001
+            log.exception("会后重新核对说话人出错，保持会上的结果")
+            return 0
+        before = {l.id: l.speaker for l in m.lines}
+        n = m.apply_speakers(changes)
+        if n:
+            moves = Counter(f"{before[l.id]}→{l.speaker}" for l in m.lines if l.id in changes and before[l.id] != l.speaker)
+            log.info("会后重新核对说话人：改了 %d 句（%s）", n, "、".join(f"{k} {v}句" for k, v in moves.items()))
+            m.save()
+        return n
+
     def end_meeting_audio(self) -> None:
         """会开完了：录音收尾。"""
         self.audio.finish()
@@ -149,6 +182,23 @@ class Hub:
         if written and self.settings.keep_audio == "until_polished" and meeting_id != self.audio._rec_id:
             self.audio_store.drop_audio(meeting_id)
             log.info("整理完了，按设置删掉这场会的录音：%s", meeting_id)
+
+    def sweep_audio(self) -> list[str]:
+        """「留 2 小时」：散会超过 2 小时的录音删掉声音。要读盘，在线程里调。"""
+        if self.settings.keep_audio != "two_hours":
+            return []
+        dropped = self.audio_store.sweep(KEEP_HOURS * 3600, time.time(), skip=self.audio._rec_id)
+        if dropped:
+            log.info("录音留满 %.0f 小时，删掉声音：%s", KEEP_HOURS, "、".join(dropped))
+        return dropped
+
+    async def _sweep_forever(self) -> None:
+        while True:
+            try:
+                await asyncio.to_thread(self.sweep_audio)
+            except Exception:  # noqa: BLE001
+                log.exception("清理过期录音出错")
+            await asyncio.sleep(600)
 
     def _recap(self) -> str:
         return "\n".join(f"[{l.speaker}] {l.text}" for l in self.meeting.lines[-60:] if l.who != "note")
@@ -267,6 +317,7 @@ class Hub:
             res = await self.worker.summarize(dialogue)
             if res.ok:
                 title, summary = split_minutes(res.text)
+                summary = checked_citations(summary, dialogue)
                 state = "done" if summary else "empty"
                 self._store_minutes(meeting_id, title, summary)
                 if not summary or not draft:
@@ -320,6 +371,7 @@ class Hub:
             log.exception("本地模型加载失败")
         await self._refresh_projects()       # 顺便把项目认一遍，开会时就不用等
         self._spawn(self._backfill_minutes())
+        self._spawn(self._sweep_forever())
 
     def _spawn(self, coro) -> None:
         task = asyncio.get_running_loop().create_task(coro)
@@ -438,8 +490,20 @@ class MuteIn(BaseModel):
     muted: bool
 
 
+class RecordIn(BaseModel):
+    on: bool
+
+
 class RenameIn(BaseModel):
     name: str = Field(min_length=1, max_length=30)
+
+
+class MeetingIn(BaseModel):
+    private: bool
+
+
+class LineSpeakerIn(BaseModel):
+    speaker_id: int
 
 
 class TaskIn(BaseModel):
@@ -508,7 +572,10 @@ def create_app(hub: Hub | None = None) -> FastAPI:
     async def meeting_start():
         hub = h()
         hub.ears.reset() if hub.ready["ears"] else None
+        was_active = hub.meeting.active
         await hub.floor.start()
+        if not was_active and hub.settings.announce:
+            hub.floor.announce()
         return hub.state()
 
     @app.post("/api/meeting/stop")
@@ -517,6 +584,8 @@ def create_app(hub: Hub | None = None) -> FastAPI:
         was_active = hub.meeting.active
         await hub.floor.stop()
         hub.end_meeting_audio()
+        if was_active:
+            await hub.recheck_speakers()
         # 说得够多才值得整理纪要；三两句的测试不整理（想要可以手动点）
         if was_active and sum(l.who == "human" for l in hub.meeting.lines) >= MINUTES_MIN_LINES:
             hub.make_minutes(hub.meeting.record_id)
@@ -544,6 +613,20 @@ def create_app(hub: Hub | None = None) -> FastAPI:
         if text is None:
             raise HTTPException(404, "没有这场会议的记录")
         return text
+
+    @app.patch("/api/meetings/{meeting_id}")
+    async def patch_meeting(meeting_id: str, body: MeetingIn):
+        """给一场会设「不给智能体看」：MCP、下一场会的开场背景、会上的「查会议」都读不到它。"""
+        hub = h()
+        if meeting_id == "latest":
+            meeting_id = next((m["id"] for m in hub.archive.recent(1)), "")
+        if meeting_id and meeting_id == hub.meeting.record_id:
+            hub.meeting.set_private(body.private)       # 正在开（或刚开完）的这场：之后重存也带着
+        elif not hub.archive.set_private(meeting_id, body.private):
+            raise HTTPException(404, "没有这场会议的记录")
+        rows = hub.archive.recent()
+        hub.meeting.emit("meetings", meetings=rows)
+        return next((r for r in rows if r["id"] == meeting_id), {"id": meeting_id, "private": body.private})
 
     @app.post("/api/meetings/{meeting_id}/minutes", status_code=202)
     async def minutes(meeting_id: str):
@@ -653,6 +736,13 @@ def create_app(hub: Hub | None = None) -> FastAPI:
         await h().floor.set_muted(body.muted)
         return {"muted": h().meeting.muted}
 
+    @app.post("/api/record")
+    async def record(body: RecordIn):
+        """「这段别记」/「可以记了」：on 为假时照样听、照样接话，但说的话不进会议记录、不录音。"""
+        need_meeting()
+        h().meeting.set_recording(body.on)
+        return {"recording": h().meeting.recording}
+
     @app.patch("/api/speakers/{speaker_id}")
     async def rename_speaker(speaker_id: int, body: RenameIn):
         if speaker_id not in h().meeting.speakers.speakers:
@@ -660,6 +750,13 @@ def create_app(hub: Hub | None = None) -> FastAPI:
         speaker = h().meeting.rename_speaker(speaker_id, body.name)
         await h().remember_name(speaker["name"])
         return speaker
+
+    @app.patch("/api/lines/{line_id}")
+    async def reassign_line(line_id: int, body: LineSpeakerIn):
+        try:
+            return h().meeting.reassign_line(line_id, body.speaker_id).to_dict()
+        except KeyError:
+            raise HTTPException(404, "没有这句话或这位说话人") from None
 
     @app.post("/api/tasks")
     async def create_task(body: TaskIn):

@@ -93,3 +93,20 @@ def test_rows_skip_a_line_cut_off_by_a_crash(tmp_path):
     folder = store.folder("m1")
     (folder / "heard.jsonl").write_text(json.dumps({"text": "完整"}) + "\n" + '{"text": "写到一半', encoding="utf-8")
     assert store.rows("m1", "heard") == [{"text": "完整"}]
+
+
+def test_old_recordings_are_swept_after_the_time_is_up(tmp_path):
+    store = AudioStore(tmp_path)
+    for mid, ended in (("old", 1000.0), ("new", 9000.0)):
+        r = rec(store, mid)
+        r.write(pcm(1.2))
+        r.event(event="end", at=1.2, wall=ended)
+        r.close()
+    r = rec(store, "crashed")                     # 没正常收尾的：按最后写盘的时间算
+    r.write(pcm(1.2))
+    r.close()
+    assert store.ended_at("old") == 1000.0 and store.ended_at("crashed") > 9000
+    dropped = store.sweep(max_age=2 * 3600, now=1000.0 + 2 * 3600 + 1, skip="new")
+    assert dropped == ["old"]
+    assert not store.has_audio("old") and store.has_audio("new") and store.has_audio("crashed")
+    assert store.rows("old", "timeline")          # 文字那几份留着

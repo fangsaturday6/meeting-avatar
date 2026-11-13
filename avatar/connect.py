@@ -120,8 +120,9 @@ def guide(base_url: str) -> str:
         f"3. 不支持 MCP 就直接请求：GET {base}/api/meetings 是会议列表（JSON，新的在前）；"
         f"GET {base}/api/meetings/latest 是最近一场的全文（Markdown），把 latest 换成列表里的 id 读别的场次。\n"
         "\n"
-        "MCP 的三个工具都是只读的：list_meetings 列出最近的会，read_meeting 读一场（可以只要纪要），"
-        "search_meetings 按关键词搜。\n"
+        "MCP 的四个工具都是只读的：list_meetings 列出最近的会，read_meeting 读一场（可以只要纪要），"
+        "read_since 读一场会某个时刻之后的新对话（会还开着时跟着看），search_meetings 按关键词搜。\n"
+        "主人设了「不给智能体看」的场次（列表里 private 为 true）MCP 读不到；直接请求接口时也请跳过它们。\n"
         "记录是语音识别的结果，有错字和同音字，搜索时多换几个说法。\n"
     )
 

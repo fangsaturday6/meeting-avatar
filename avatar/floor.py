@@ -15,7 +15,7 @@ from typing import AsyncIterator, Awaitable, Callable, Protocol
 
 from .meeting import Line, Meeting, Task
 from .textutil import (TASK_KINDS, Reply, ReplyStream, SentenceSplitter, echo_score, fix_name,
-                       is_backchannel, mentions, similar)
+                       is_backchannel, mentions, record_command, similar)
 
 log = logging.getLogger("avatar.floor")
 
@@ -138,6 +138,8 @@ class Floor:
     filler_after = 2.5      # 被点名后这么久还没想出第一句，先垫一句，免得像没听见
     fillers = ("嗯，我想一下。", "稍等，我想想。", "嗯，让我想想。")
     resume_window = 6.0     # 被打断后这么久之内对方只是附和了一声，就接着把话说完
+    false_barge_wait = 2.0  # 被声音打断后，这么久都没识别出一句话（咳嗽、挪椅子），就接着说完（LiveKit 的默认值）
+    report_gap = 1.5        # 只为汇报后台任务结果开口时，要安静这么久：别插在两句话的缝里
     max_restarts = 6        # 还没开口就被新的话打回去重想，连续最多这么多次，之后先把想好的说出来
     start_wait = 12.0       # 入会最多让人等这么久；大脑还没连上就先开始会议，它在后台接着连
     start_timeout = 60.0    # 大脑预热最多多久，超过就算这次没连上（之后有人说话时再试）
@@ -205,6 +207,20 @@ class Floor:
         self.m.set_status("listening")
         self._loop_task = asyncio.create_task(self._loop())
 
+    def announce(self) -> None:
+        """开场先说一句会做记录（找空档说，不经大脑）。"""
+        if self.m.active:
+            self._direct.append((self.announcement(), "（开场你先说了这句：「{said}」）"))
+            self._wake.set()
+
+    def announcement(self) -> str:
+        """开场那一句：告诉在场的人它是谁、会做记录。替主人开会时说清是谁的 AI。"""
+        s = self.m.settings
+        owner = s.owner.strip()
+        if s.role == "delegate" and owner:
+            return f"大家好，我是{owner}的 AI 助手{s.name}，这场会我会记录下来。"
+        return f"我是{s.name}，这场会我会记录下来。"
+
     async def _warm_up(self) -> None:
         try:
             await asyncio.wait_for(self.brain.start(), self.start_timeout)
@@ -256,6 +272,15 @@ class Floor:
         self._speech_changed.set()
         self._cancel(self._barge_task)
         self._arm_nudge()
+        if self._cut is not None:
+            self._bg_spawn(self._resume_after_noise(self._cut))
+
+    async def _resume_after_noise(self, cut) -> None:
+        """被声音打断了，声音停了也没识别出话（杂音被耳朵挡掉了）：把没说完的接着说完。"""
+        await asyncio.sleep(self.false_barge_wait)
+        if self._cut is cut and self.m.active and not self.m.humans_speaking:
+            log.info("打断它的只是一阵杂音，接着说完")
+            self._resume("（刚才打断你的只是一阵杂音，没有人说话，你已经把话接着说完：「{said}」）")
 
     async def on_utterance(self, text: str, embedding=None, speaker_name: str | None = None,
                            seconds: float = 10.0, at: float | None = None) -> Line | None:
@@ -277,7 +302,19 @@ class Floor:
             log.info("听到 [%s] %.1f秒｜%s｜声纹：%s", self.m.speakers.name_of(sid), seconds, text,
                      "、".join(f"{n} {v:.2f}" for n, v in scores) or ("第一位" if embedding is not None else "太短，沿用上一位"))
         self.m.emit("speaker", speaker=self.m.speakers.speakers[sid].to_dict())
+        command = record_command(text, self.m.settings.name)
+        if command is False:
+            self.m.set_recording(False)          # 「这段别记」这句本身也不记
         line = self.m.add_line("human", text, sid, seconds if speaker_name is None else 0.0, at=at)
+        if command is not None:
+            # 对它的指令，不用大脑想：应一声就行。之后的话照样听、照样接，只是不进记录、不录音
+            if command:
+                self.m.set_recording(True)
+            log.info("有人让它%s", "接着记" if command else "这段别记")
+            self._direct.append(("好，接着记。" if command else "好，这段不记。",
+                                 "（有人让你" + ("接着记录" if command else "这段先不记录") + "，你应了一声：「{said}」）"))
+            self._wake.set()
+            return line
         self._nudge_ok = True
         if is_backchannel(text) and self.m.settings.name not in text and self._resume(
                 f"（你说到一半时 [{line.speaker}] 附和了一声「{text}」，他在听，你已经把话接着说完：「" + "{said}」）"):
@@ -383,10 +420,13 @@ class Floor:
             raise ValueError("没有这种任务")
         task = self.m.add_task(kind, brief)
         self.m.show_on_board(task.id)
-        t = asyncio.create_task(self._run_task(task, asker))
+        self._bg_spawn(self._run_task(task, asker))
+        return task
+
+    def _bg_spawn(self, coro) -> None:
+        t = asyncio.create_task(coro)
         self._bg.add(t)
         t.add_done_callback(self._bg.discard)
-        return task
 
     # ================= 主循环 =================
     async def _loop(self) -> None:
@@ -821,7 +861,8 @@ class Floor:
         while True:
             self._speech_changed.clear()
             if not self.m.humans_speaking:
-                remain = self.m.settings.gap - (self.clock() - self._last_speech_end)
+                gap = max(self.m.settings.gap, self.report_gap) if att.report_only else self.m.settings.gap
+                remain = gap - (self.clock() - self._last_speech_end)
                 if att.phase == "waiting":
                     # 等的过程中有人说过话：那句话的文字还在识别，等它到了再决定（可能要重想）
                     remain = max(remain, self.asr_grace - (self.clock() - self._speech_end_at))

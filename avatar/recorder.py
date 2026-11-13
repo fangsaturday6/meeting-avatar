@@ -90,6 +90,28 @@ class AudioStore:
                 log.exception("录音块没补封上：%s", part)
         return n
 
+    def ended_at(self, meeting_id: str) -> float:
+        """这场会什么时候散的：录音收尾时记下的时刻；没正常收尾的，按最后写盘的时间算。"""
+        ends = [r["wall"] for r in self.rows(meeting_id, "timeline") if r.get("event") == "end" and r.get("wall")]
+        if ends:
+            return float(ends[-1])
+        folder = self._existing(meeting_id)
+        return max((p.stat().st_mtime for p in folder.iterdir()), default=0.0) if folder else 0.0
+
+    def sweep(self, max_age: float, now: float, skip: str = "") -> list[str]:
+        """散会超过 max_age 秒的录音删掉声音（文字和声纹留着）。skip 是正在开的那场。返回删了哪几场。"""
+        if not self.root.is_dir():
+            return []
+        dropped = []
+        for folder in sorted(self.root.iterdir()):
+            mid = folder.name
+            if mid == skip or not folder.is_dir() or not self.has_audio(mid):
+                continue
+            if now - self.ended_at(mid) > max_age:
+                self.drop_audio(mid)
+                dropped.append(mid)
+        return dropped
+
     def drop_audio(self, meeting_id: str) -> None:
         """删掉声音，留下文字和声纹。"""
         folder = self._existing(meeting_id)

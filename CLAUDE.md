@@ -27,7 +27,8 @@
 （如 `2026-11-12_000458.md`），按文件名排序的最后一个就是最近一场。要看或分析会议，直接读这些文件。
 散会后整理出的纪要在文件里的「## 纪要」一节（结论、待办、没定的事）；「## 整理稿」是会后书面化的对话
 （改过错字、去了口头禅，最好读，不一定每场都有）；「## 对话」是逐句的识别结果（已去掉语气词和口吃、并成段），核对原话看这一节。
-已登记 MCP 工具 `meetings`（`list_meetings` / `read_meeting` / `search_meetings`）时优先用它。
+已登记 MCP 工具 `meetings`（`list_meetings` / `read_meeting` / `read_since` / `search_meetings`）时优先用它；
+元数据里 `private: yes` 的场次是主人设了「不给智能体看」，不要读。
 这个目录不进 git，Grep / Glob 默认搜不到，先 `ls workspace/meetings/` 再按路径读。
 文件由 `avatar/archive.py` 写；后台在跑时也可以走 `GET /api/meetings`、`GET /api/meetings/latest`。
 同名的录音目录在 `workspace/audio/<会议编号>/`（`avatar/recorder.py` 写）：原始声音 `mic-*.wav`（可能已按设置删掉）、

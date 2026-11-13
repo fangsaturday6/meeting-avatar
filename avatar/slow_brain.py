@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import glossary, knowledge
-from .archive import MEETINGS_DIR, NO_CONTENT
+from .archive import MEETINGS_DIR, NO_CONTENT, Archive
 from .config import DESIGN_DIR, WORKSPACE, Settings, child_env
 from .floor import WorkResult
 from .meeting import Task
@@ -84,10 +84,12 @@ MINUTES = (
     "哪怕下面只有一节内容，第一行也要先写标题。\n"
     "空一行之后：\n"
     "### 概要\n两三句话说清这场会谈了什么、进行到哪一步。这一节每场会都要有。\n"
-    "### 结论\n- 已经定下来的事，一条一句\n"
-    "### 待办\n- 负责人：做什么（有期限就写上）\n"
+    "### 结论\n- 已经定下来的事，一条一句（10:02:30）\n"
+    "### 待办\n- 负责人：做什么（有期限就写上）（10:05:12）\n"
     "### 没定的事\n- 还悬着的问题和分歧\n"
     "{owner_section}\n"
+    "结论、待办、没定的事每条末尾用括号注明出处：记录里说到这件事的那一段行首的时刻，原样照抄，"
+    "多处用顿号隔开，最多三处；实在找不到出处就不注。\n"
     "要求：只写记录里确实说过的，不推测、不补充；负责人不明确就写「待定」；"
     "电视、视频、闲聊这类和会议无关的声音直接忽略；除概要外每节最多 6 条，没有内容的节整节不写。"
     "哪怕这场会只是在试用、调试这个 AI 助手，也照实写概要（试了什么、提了哪些要求）。"
@@ -213,8 +215,9 @@ class SlowBrain:
             else:
                 return WorkResult(False, "还没有登记项目目录，没法查代码")
         elif task.kind == "查会议":
-            cwd = MEETINGS_DIR
-            if not cwd.is_dir() or not any(cwd.glob("*.md")):
+            # 只给它看没设「不给智能体看」的会：复制一份公开的当工作目录，它看不到的就读不到
+            cwd = await asyncio.to_thread(Archive(MEETINGS_DIR).public_copy, MEETINGS_DIR.with_name("meetings-public"))
+            if not any(cwd.glob("*.md")):
                 return WorkResult(False, "还没有以前的会议记录")
         elif task.kind == "做设计":
             folder = f"task-{task.id}-{int(time.time())}"

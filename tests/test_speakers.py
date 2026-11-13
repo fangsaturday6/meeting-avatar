@@ -88,3 +88,15 @@ def test_keeps_the_scores_behind_its_last_decision():
     assert book.last_scores["说话人1"] > 0.9 > 0.3 > book.last_scores["说话人2"]
     book.assign(None)
     assert book.last_scores == {}              # 太短、没有声纹：没有可比的
+
+
+def test_merging_moves_the_voice_and_forgets_the_old_number():
+    book = SpeakerBook()
+    a = book.assign(np.array([1.0, 0.0]), 4)
+    b = book.assign(np.array([0.0, 1.0]), 4)
+    book.rename(a, "张三")
+    assert book.speakers[a].locked and not book.speakers[b].locked     # 改过名的就是用户认过的
+    book.merge(b, a)
+    assert list(book.speakers) == [a] and book.speakers[a].count == 2
+    assert book.last_id == a
+    assert book.assign(np.array([0.1, 1.0]), 4) == a                    # 并过来的声音也认得
