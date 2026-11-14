@@ -74,7 +74,7 @@ def test_short_segment_does_not_move_centroid():
 def test_similar_but_distinct_voices_split_at_threshold():
     book = SpeakerBook()
     a = np.zeros(8); a[0] = 1
-    b = np.zeros(8); b[0], b[1] = 0.5, 0.866          # 与 a 的相似度 0.5，低于 0.55
+    b = np.zeros(8); b[0], b[1] = 0.45, 0.893         # 与 a 的相似度 0.45，低于 0.5
     assert book.assign(a, seconds=5) != book.assign(b, seconds=5)
 
 

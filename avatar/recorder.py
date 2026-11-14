@@ -82,6 +82,42 @@ class AudioStore:
             return b""
         return b"".join(p.read_bytes()[_HEAD:] for p in self._chunks(folder, channel))
 
+    def clip(self, meeting_id: str, start: float, end: float, channel: str = "mic") -> bytes:
+        """录音时钟上 [start, end) 秒这一段声音（heard.jsonl 里的 at 就是这把尺）。只读用到的那几块。
+
+        「这段别记」那段时间照样计时、但不落盘，所以录音文件里的位置要扣掉之前不录的时长；
+        要的这段碰上了不录的时间，就返回空。"""
+        folder = self._existing(meeting_id)
+        if not folder or end <= start:
+            return b""
+        events = self.rows(meeting_id, "timeline" if channel == "mic" else f"{channel}-timeline")
+        gaps, began = [], None
+        for r in events:
+            if r.get("event") == "off" and began is None:
+                began = float(r["at"])
+            elif r.get("event") == "on" and began is not None:
+                gaps.append((began, float(r["at"])))
+                began = None
+        if began is not None:
+            gaps.append((began, float("inf")))
+        if any(a < end and start < b for a, b in gaps):
+            return b""
+        shift = sum(b - a for a, b in gaps if b <= start)
+        first, last = int((start - shift) * RATE) * WIDTH, int((end - shift) * RATE) * WIDTH
+        out = bytearray()
+        begin = 0                                   # 这一块的第一个字节在整场录音里的位置
+        for path in self._chunks(folder, channel):
+            size = max(0, path.stat().st_size - _HEAD)
+            lo, hi = max(first, begin), min(last, begin + size)
+            if lo < hi:
+                with path.open("rb") as f:
+                    f.seek(_HEAD + lo - begin)
+                    out += f.read(hi - lo)
+            begin += size
+            if begin >= last:
+                break
+        return bytes(out)
+
     def seal_all(self) -> int:
         """补封上次没正常收尾的录音块。返回补了几块。"""
         n = 0

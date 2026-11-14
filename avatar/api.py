@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 import numpy as np
 from pydantic import BaseModel, Field
 
-from . import connect, glossary, knowledge, mcp_server, models
+from . import connect, glossary, knowledge, mcp_server, models, rehear
 from .archive import NO_CONTENT, Archive, checked_citations, dialogue_of, split_minutes
 from .audio_in import AudioIn
 from .config import DESIGN_DIR, ENGAGEMENTS, KEEP_AUDIO, KEEP_HOURS, ROLES, SCENES, VOICES, Settings
@@ -30,7 +30,7 @@ from .floor import Floor
 from .meeting import Meeting
 from .mouth import Mouth
 from .recluster import Item, recluster
-from .recorder import AudioStore
+from .recorder import RATE, AudioStore
 from .slow_brain import SlowBrain
 from .textutil import TASK_KINDS, echo_score
 
@@ -217,6 +217,53 @@ class Hub:
             log.info("会后重新核对说话人：改了 %d 句（%s）", n, "、".join(f"{k} {v}句" for k, v in moves.items()))
             m.save()
         return n
+
+    async def rehear(self) -> int:
+        """散会后重听一遍（rehear.py）：同一个人接连说的碎句拼起来再认，比会上准。返回换了几段。
+        要一两分钟，在后台跑；识别和会上共用一个线程排队，下一场会开起来也不会抢。"""
+        m, mid = self.meeting, self.meeting.record_id
+        if not mid or m.active or not self.ready["ears"]:
+            return 0
+        channel_of = {}
+        for ch, name in (("mic", "heard"), ("system", "system-heard")):
+            for r in await asyncio.to_thread(self.audio_store.rows, mid, name):
+                if r.get("line_id"):
+                    channel_of[r["line_id"]] = ch
+        merged = []
+        loop = asyncio.get_running_loop()
+        lead = self.ears.lead_in
+        for p in rehear.pieces(m.lines, channel_of):
+            pcm = await asyncio.to_thread(self.audio_store.clip, mid, p.start - lead, p.end, p.channel)
+            if not pcm:
+                pcm = await asyncio.to_thread(self.audio_store.clip, mid, p.start, p.end, p.channel)
+                before = 0
+            else:
+                before = int(round(min(lead, p.start) * RATE))
+            if not pcm or m.record_id != mid or m.active:
+                continue
+            x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+            try:
+                again = await loop.run_in_executor(self.ears._pool, self.ears.recognize, x[before:], x[:before])
+            except Exception:  # noqa: BLE001
+                log.exception("散会后重听出错，保持会上的结果")
+                return 0
+            if rehear.better(p.live, again):
+                merged.append((p.line_ids, again, p.end - p.start))
+        if m.record_id != mid or m.active:
+            return 0                # 下一场会已经开起来了：这场的记录不在手里了，不动
+        n = m.rejoin_lines(merged)
+        if n:
+            log.info("散会后重听：%d 段碎句拼起来重认（共 %d 句）", n, sum(len(ids) for ids, _, _ in merged))
+            await asyncio.to_thread(m.save)
+        return n
+
+    async def after_meeting(self, meeting_id: str) -> None:
+        """散会后：先重听，再整理纪要（整理稿就拿到更准的原文）。"""
+        try:
+            await self.rehear()
+        except Exception:  # noqa: BLE001
+            log.exception("散会后重听出错")
+        self.make_minutes(meeting_id)
 
     def end_meeting_audio(self) -> None:
         """会开完了：两路录音收尾。"""
@@ -639,7 +686,11 @@ def create_app(hub: Hub | None = None) -> FastAPI:
             await hub.recheck_speakers()
         # 说得够多才值得整理纪要；三两句的测试不整理（想要可以手动点）
         if was_active and sum(l.who == "human" for l in hub.meeting.lines) >= MINUTES_MIN_LINES:
-            hub.make_minutes(hub.meeting.record_id)
+            if hub.ready["ears"] and hub.audio_store.has_audio(hub.meeting.record_id):
+                hub.meeting.emit("minutes", id=hub.meeting.record_id, state="running")
+                hub._spawn(hub.after_meeting(hub.meeting.record_id))
+            else:
+                hub.make_minutes(hub.meeting.record_id)
         return hub.state()
 
     # ---------- 形象 ----------

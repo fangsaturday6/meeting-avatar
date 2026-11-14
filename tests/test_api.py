@@ -497,8 +497,10 @@ def test_a_name_typed_for_a_speaker_goes_into_the_glossary(client, tmp_path):
     with client.websocket_connect("/ws/events") as ws:
         ws.receive_json()
         assert client.patch("/api/speakers/1", json={"name": "陈默"}).json()["name"] == "陈默"
-        seen = [ws.receive_json() for _ in range(2)]
-    assert {"type": "glossary", "text": "# 会上的人\n陈默\n", "count": 1} in seen
+        seen = [ws.receive_json()]
+        while seen[-1]["type"] != "glossary" and len(seen) < 5:     # 和存盘后的会议列表谁先到不一定
+            seen.append(ws.receive_json())
+    assert seen[-1] == {"type": "glossary", "text": "# 会上的人\n陈默\n", "count": 1}
     client.patch("/api/speakers/1", json={"name": "陈默"})             # 已经有了就不再加
     client.patch("/api/speakers/1", json={"name": "说话人3"})          # 占位的名字不算
     client.patch("/api/speakers/1", json={"name": "周航"})
@@ -753,3 +755,37 @@ def test_in_a_call_what_leaks_from_the_speakers_into_the_mic_is_dropped(client):
     assert client.portal.call(mic_first) is None
     texts = [l["text"] for l in client.get("/api/state").json()["lines"]]
     assert texts.count("另外支付那块还要再等一周") == 1
+
+
+def test_after_the_meeting_broken_up_lines_are_heard_again_before_the_minutes(client):
+    import functools
+    import numpy as np
+    hub = client.hub
+    hub.brain.replies = ["[静]"] * 20
+    client.post("/api/meeting/start")
+    with client.websocket_connect("/ws/audio") as stage:
+        for f in frames(100):                                   # 4 秒声音
+            stage.send_bytes(f)
+        deadline = time.time() + 3
+        while hub.audio.samples < 100 * 640 and time.time() < deadline:
+            time.sleep(0.01)
+        voice = np.ones(4, dtype=np.float32)
+        for text, at in (("先做登录", 0.2), ("再做注", 1.5), ("册然后上线", 2.8)):     # 一句话被断句切成了三截
+            client.portal.call(functools.partial(hub._heard, text, voice, seconds=1.0, at=at))
+    wait_for(client, lambda s: len(s["lines"]) == 3)
+    got = []
+
+    def recognize(samples, lead):
+        got.append((len(samples), len(lead)))
+        return "先做登录，再做注册，然后上线。"
+    hub.ready["ears"] = True
+    hub.ears.recognize = recognize
+    client.post("/api/meeting/stop")
+    st = wait_for(client, lambda s: len(s["lines"]) == 1)
+    assert st["lines"][0]["text"] == "先做登录，再做注册，然后上线。" and st["lines"][0]["at"] == 0.2
+    assert got == [(int(3.6 * 16000), int(0.2 * 16000))]       # 从第一截到最后一截，再往前多带 0.2 秒
+    deadline = time.time() + 3
+    while "## 纪要" not in client.get("/api/meetings/latest").text and time.time() < deadline:
+        time.sleep(0.05)
+    text = client.get("/api/meetings/latest").text
+    assert "## 纪要" in text and "先做登录，再做注册，然后上线。" in text and "再做注" not in text.replace("再做注册", "")

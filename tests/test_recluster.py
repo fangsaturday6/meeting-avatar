@@ -11,9 +11,9 @@ def voice(base, noise=0.25):
     return (base + rng.normal(scale=noise, size=64)).astype(np.float32)
 
 
-def items(spec):
+def items(spec, noise=0.25):
     """spec：[(说话人原编号, 真实声音, 秒数), …]，行号从 1 起。"""
-    return [Item(line_id=i, seconds=sec, emb=None if base is None else voice(base), speaker_id=sid)
+    return [Item(line_id=i, seconds=sec, emb=None if base is None else voice(base, noise), speaker_id=sid)
             for i, (sid, base, sec) in enumerate(spec, 1)]
 
 
@@ -54,3 +54,17 @@ def test_a_new_person_gets_a_new_number():
 def test_too_little_to_go_on_changes_nothing():
     assert recluster(items([(1, A, 4), (2, B, 1.0)])) == {}
     assert recluster([]) == {}
+
+
+def test_a_noisy_room_does_not_split_one_person_into_many():
+    # 真实会议里屋里收音，同一个人的长句之间相似度常只有 0.5~0.7（这里噪声取到约 0.6）
+    its = items([(1, A, 4)] * 30 + [(2, B, 4)] * 15, noise=0.8)
+    changes = recluster(its)
+    assert not any(v < 0 for v in changes.values())          # 没有凭空多出来的人
+    final = {changes.get(it.line_id, it.speaker_id) for it in its}
+    assert final == {1, 2}
+
+
+def test_a_tiny_cluster_is_not_a_new_person():
+    its = items([(1, A, 4)] * 25 + [(1, C, 3)])                # C 只说了一句，不到全场的 5%
+    assert not any(v < 0 for v in recluster(its).values())

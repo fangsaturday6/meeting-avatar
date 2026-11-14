@@ -273,6 +273,25 @@ class Meeting:
             self._save_soon()
         return n
 
+    def rejoin_lines(self, merged: list[tuple[list[int], str, float]]) -> int:
+        """散会后重听（rehear.py）：几句碎话换成重认出的一整句。[(行号们, 新的文字, 合起来多长), …]。
+        留第一句的行号和起点，其余几句去掉。返回换了几段。"""
+        drop: set[int] = set()
+        n = 0
+        for ids, text, seconds in merged:
+            keep = next((l for l in self.lines if l.id == ids[0] and l.who == "human"), None)
+            if keep is None or not text:
+                continue
+            keep.text, keep.seconds = text, round(seconds, 3)
+            drop.update(ids[1:])
+            n += 1
+        if drop:
+            self.lines = [l for l in self.lines if l.id not in drop]
+            for sp in self.speakers.speakers.values():
+                sp.count = sum(1 for l in self.lines if l.who == "human" and l.speaker_id == sp.id)
+            self.emit("snapshot", state=self.snapshot())
+        return n
+
     # ---- 任务 ----
     def add_task(self, kind: str, brief: str) -> Task:
         self._task_id += 1

@@ -58,7 +58,8 @@
   就是这样一个后台（8766 端口，数据在 `~/.cache/avatar-dev`）。
 - 听写分三层，各管各的，别混：`ears.py` 只挡「不是人话」的（`textutil.strip_noise`），接话逻辑拿到的是原话
   （它靠「嗯」「对」判断对方在听）；写记录时才去语气词、并段（`archive.paragraphs` + `textutil.tidy`，只删不改）；
-  改字只在会后的整理稿里做（`slow_brain.polish`，结果必须过 `checked_polish`）。
+  改字只在会后的整理稿里做（`slow_brain.polish`，结果必须过 `checked_polish`）。散会后重听（`rehear.py`，碎句拼长再认）
+  是重新识别、不是改字，排在整理纪要之前。
   调断句、识别、认人的参数前，先用 `uv run python -m avatar.replay <会议编号> --diff heard` 拿真实录音比，
   改参数用 `--set`，两套参数用 `--save` / `--diff` 互比；结论写进 `docs/superpowers/plans/2026-11-13-recording-roadmap.md` 的结论区。
   人名、公司名、行话靠常用词表（`workspace/glossary.txt`，`glossary.py`）：只按读音找出可疑的地方写进纪要和整理稿的提示词，

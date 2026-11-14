@@ -215,16 +215,26 @@ class Ears:
     def _recognize(self, samples: np.ndarray, lead: np.ndarray) -> tuple[str, np.ndarray | None, float]:
         """samples 是断句给的片段，lead 是它前面多带的一小段：只给识别用，时长和声纹仍按片段本身算。"""
         seconds = len(samples) / SAMPLE_RATE
-        st = self._asr.create_stream()
-        st.accept_waveform(SAMPLE_RATE, np.concatenate([lead, samples]))
-        self._asr.decode_stream(st)
-        text = strip_noise(st.result.text, getattr(st.result, "event", ""))
+        text = self.recognize(samples, lead, note=True)
         if not text:
             return "", None, seconds
         emb = None
         if self._spk is not None and len(samples) >= SAMPLE_RATE * self.min_embed_seconds:
             emb = self._embed(samples)
         return text, emb, seconds
+
+    def recognize(self, samples: np.ndarray, lead: np.ndarray, note: bool = False) -> str:
+        """只认字，不取声纹（在线程池里调）。note：被当成杂音挡掉的、模型说不是人声的，记一行日志，
+        以后查「真话被挡了 / 杂音漏进来了」时有据可查（挡杂音的规则攒够这些再改）。"""
+        st = self._asr.create_stream()
+        st.accept_waveform(SAMPLE_RATE, np.concatenate([lead, samples]))
+        self._asr.decode_stream(st)
+        raw, event = st.result.text, getattr(st.result, "event", "")
+        text = strip_noise(raw, event)
+        if note and raw.strip() and (not text or (event and "Speech" not in event)):
+            log.info("%s %.1f秒 [%s]｜%s", "挡掉" if not text else "不像人声但留下", len(samples) / SAMPLE_RATE,
+                     event.strip("<|>") or "?", raw)
+        return text
 
     @property
     def busy(self) -> bool:

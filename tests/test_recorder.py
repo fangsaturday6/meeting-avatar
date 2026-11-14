@@ -1,6 +1,7 @@
 """录音落盘：分块、崩溃后还能读、保留策略。"""
 import json
 import stat
+import struct
 import wave
 
 import numpy as np
@@ -130,3 +131,22 @@ def test_the_system_sound_is_a_separate_track(tmp_path):
     assert store.rows("m1", "system-heard") == [{"text": "线上的人说的"}]
     store.drop_audio("m1")
     assert not store.has_audio("m1") and store.pcm("m1", "system") == b""
+
+
+def test_a_clip_is_cut_by_the_recording_clock_even_after_an_off_the_record_stretch(tmp_path):
+    store = AudioStore(tmp_path)
+    folder = store.folder("2026-11-14_120000")
+    rec = Recorder(folder, keep=lambda: "always")
+    rec.chunk_seconds = 1.0                                 # 每块 1 秒，跨块也要接得上
+    second = lambda v: struct.pack("<16000h", *([v] * 16000))
+    rec.event(event="start", at=0.0)
+    rec.write(second(1) + second(2))                        # 第 0~2 秒
+    rec.event(event="off", at=2.0)                          # 第 2~5 秒「这段别记」：照样计时，不落盘
+    rec.event(event="on", at=5.0)
+    rec.write(second(3))                                    # 第 5~6 秒
+    rec.close()
+    clip = store.clip("2026-11-14_120000", 1.5, 2.0)
+    assert clip == struct.pack("<8000h", *([2] * 8000))
+    assert store.clip("2026-11-14_120000", 5.5, 6.0) == struct.pack("<8000h", *([3] * 8000))
+    assert store.clip("2026-11-14_120000", 0.9, 1.1) == struct.pack("<3200h", *([1] * 1600 + [2] * 1600))
+    assert store.clip("2026-11-14_120000", 1.5, 2.5) == b""          # 碰上了不录的那段

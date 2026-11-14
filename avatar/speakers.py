@@ -25,13 +25,16 @@ def _unit(v: np.ndarray) -> np.ndarray:
 
 
 class SpeakerBook:
-    """实测（CAM++ 声纹）：同一个人的长句相似度 0.82~0.95，不同的人一般低于 0.42；
-    一两秒的短句不稳定，和本人长句的相似度可能只有 0.46。所以：
-    阈值取 0.55；短句只用来归属，不用来新建说话人，也不更新质心。"""
+    """安静时实测（CAM++ 声纹）同一个人的长句相似度 0.82~0.95，不同的人一般低于 0.42；
+    真实会议里屋里收音，同一个人的长句之间常常只有 0.5~0.7。一两秒的短句更不稳定。所以：
+    阈值取 0.5；短于 2 秒的只用来归属，不更新质心；短于 3 秒的对不上谁时沿用上一位，不新建说话人。
+    （2026-11-14 拿两场已知人数的真实会议标定，0.55 → 0.5、新建要 3 秒：认对的时长 71%→71%、84%→88%，
+    多出来的说话人 6→3、15→8。样例库、定期合并、更严的质心更新都试过，都变差，见录音路线图结论区。）"""
 
-    reliable_seconds = 2.0
+    reliable_seconds = 2.0      # 够长才更新质心
+    create_seconds = 3.0        # 够长才新建一位说话人
 
-    def __init__(self, threshold: float = 0.55):
+    def __init__(self, threshold: float = 0.5):
         self.threshold = threshold
         self.speakers: dict[int, Speaker] = {}
         self.last_id: int | None = None
@@ -69,8 +72,8 @@ class SpeakerBook:
             if sim > best_sim:
                 best, best_sim = sp, sim
         if best is None or best_sim < self.threshold:
-            if not reliable and self._last_voice in self.speakers:
-                return self._reuse_last()      # 短句对不上谁：多半还是刚才那位
+            if seconds < self.create_seconds and self._last_voice in self.speakers:
+                return self._reuse_last()      # 不够长又对不上谁：多半还是刚才那位
             best = self._new()
             best.centroid = e
         elif reliable:
