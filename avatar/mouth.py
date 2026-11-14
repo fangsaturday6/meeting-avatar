@@ -88,7 +88,7 @@ class Mouth:
 
         voice = voice or (self.settings.voice if self.settings.voice != "local" else "zh-CN-YunxiNeural")
         rate = f"{round((self.settings.speed - 1) * 100):+d}%"
-        proxy = proxy_url()
+        proxy = await asyncio.to_thread(proxy_url)
         buf = bytearray()
         async for chunk in edge_tts.Communicate(text, voice, rate=rate, proxy=proxy).stream():
             if chunk["type"] == "audio":

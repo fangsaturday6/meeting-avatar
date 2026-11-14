@@ -8,14 +8,14 @@
 //          AVATAR_THEME    开发用：强制 light 或 dark
 //          AVATAR_SHOT     开发用：载入几秒后把主窗口截图存成这个 PNG 文件，然后退出；
 //                          再加 AVATAR_ROUND=1 会裁成圆角方形（生成应用图标用）
-const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, desktopCapturer, dialog, ipcMain, nativeTheme, session, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const BASE = (process.env.AVATAR_URL || `http://127.0.0.1:${process.env.AVATAR_PORT || 8765}`).replace(/\/$/, '');
 const PROJECT = process.env.AVATAR_PROJECT || packedProject() || path.resolve(__dirname, '..');
-const ALLOWED = ['media', 'speaker-selection'];     // 页面只需要麦克风和选择扬声器
+const ALLOWED = ['media', 'speaker-selection', 'display-capture'];     // 麦克风、选择扬声器、系统声音
 const PAGE = process.env.AVATAR_PAGE || '/?autostart=1';
 const [WIDTH, HEIGHT] = (process.env.AVATAR_SIZE || '440x640').split('x').map(Number);
 const SHOT = process.env.AVATAR_SHOT || '';
@@ -171,6 +171,16 @@ app.whenReady().then(async () => {
   buildMenu();
   session.defaultSession.setPermissionRequestHandler((wc, permission, done, details) => done(ALLOWED.includes(permission) && ours(details.requestingUrl || wc.getURL())));
   session.defaultSession.setPermissionCheckHandler((_wc, permission, origin) => ALLOWED.includes(permission) && ours(origin.replace(/\/$/, '')));
+  // 「我在开线上会」时页面要这台电脑放出的声音（线上的人）：给系统声音回环。Chromium 要求同时给一个画面源，
+  // 页面拿到就把画面关掉。要在「隐私与安全性 › 录屏与系统录音」开「仅系统录音」，没开时拿到的是全零的声音
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    const from = String(request.securityOrigin || request.frame?.url || '').replace(/\/$/, '');
+    if (!ours(from)) return callback({});
+    try {
+      const [screen] = await desktopCapturer.getSources({ types: ['screen'] });
+      callback(screen ? { video: screen, audio: 'loopback' } : {});
+    } catch { callback({}); }
+  });
   try {
     await ensureBackend();
   } catch (e) {

@@ -1096,13 +1096,33 @@ async def test_a_real_sentence_after_the_cut_is_not_talked_over():
 
 
 async def test_a_finished_task_waits_for_a_proper_pause_before_reporting():
-    worker = FakeWorker(result=WorkResult(True, "接口文档在开放平台第三章。"), delay=0.01)
+    worker = FakeWorker(result=WorkResult(True, "接口文档在开放平台第三章。"), delay=0.2)
     m, brain, mouth, player, floor = await make(["[[派工 查资料:飞书接口]]", "查到了，在第三章。"], worker=worker)
     floor.report_gap = 0.4
     await floor.on_utterance("查一下飞书接口", speaker_name="张三")
-    await settle(lambda: m.tasks and m.tasks[0].status == "done")
-    floor.on_speech_start(); floor.on_speech_end()     # 结果刚出来时有人说了句话
+    await settle(lambda: m.tasks and m.status == "listening")
+    floor.on_speech_start()                            # 结果出来时有人正在说话
+    await settle(lambda: m.tasks[0].status == "done")
+    floor.on_speech_end()
     t0 = asyncio.get_event_loop().time()
     await settle(lambda: "在第三章。" in "".join(player.texts), timeout=3)
     assert asyncio.get_event_loop().time() - t0 >= 0.35   # 安静够久才开口，不插在两句话的缝里
+    await floor.stop()
+
+
+async def test_its_own_voice_in_the_system_sound_is_dropped():
+    """你在电脑上开线上会时，系统声音里也有它自己说的话：不管有没有和人声重叠，对得上它刚说的就丢。"""
+    m, brain, mouth, player, floor = await make(["先做登录吧，支付依赖它。", "[静]"])
+    await floor.on_utterance("小克你觉得先做什么", speaker_name="张三")
+    await settle(lambda: player.played and m.status == "listening")
+    assert await floor.on_utterance("先做登录吧支付依赖它", source="system") is None
+    line = await floor.on_utterance("我同意先做登录", embedding=None, source="system", seconds=2.0, at=3.0)
+    assert line is not None and line.at == 3.0 and line.seconds == 2.0
+    await floor.stop()
+
+
+async def test_a_known_voice_keeps_its_length_and_place():
+    m, brain, mouth, player, floor = await make(["[静]"])
+    line = await floor.on_utterance("我先说两句", speaker_name="老方", source="mic", seconds=1.5, at=2.0)
+    assert (line.speaker, line.seconds, line.at) == ("老方", 1.5, 2.0)
     await floor.stop()

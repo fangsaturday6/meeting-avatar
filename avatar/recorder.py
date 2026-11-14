@@ -26,6 +26,7 @@ RATE = 16000
 WIDTH = 2                               # 16 位
 AUDIO_DIR = WORKSPACE / "audio"
 _ID = re.compile(r"[\w-]+")
+CHANNELS = ("mic", "system")    # 麦克风；这台电脑放出来的声音（你在电脑上开线上会时，线上的人在这一路）
 _HEAD = 44
 
 
@@ -65,24 +66,26 @@ class AudioStore:
         path = self.root / meeting_id
         return path if path.is_dir() else None
 
-    def _chunks(self, folder: Path) -> list[Path]:
-        return sorted(p for p in folder.iterdir() if p.name.startswith("mic-") and p.name.endswith((".wav", ".wav.part")))
+    def _chunks(self, folder: Path, channel: str | None = None) -> list[Path]:
+        """录音块，按块序。channel：mic（麦克风）/ system（这台电脑放出的声音）；不给就是两路都要。"""
+        heads = (f"{channel}-",) if channel else tuple(f"{c}-" for c in CHANNELS)
+        return sorted(p for p in folder.iterdir() if p.name.startswith(heads) and p.name.endswith((".wav", ".wav.part")))
 
     def has_audio(self, meeting_id: str) -> bool:
         folder = self._existing(meeting_id)
         return bool(folder and self._chunks(folder))
 
-    def pcm(self, meeting_id: str) -> bytes:
-        """整场会的声音（按块的顺序接起来，含没封口的那块）。"""
+    def pcm(self, meeting_id: str, channel: str = "mic") -> bytes:
+        """整场会这一路的声音（按块的顺序接起来，含没封口的那块）。"""
         folder = self._existing(meeting_id)
         if not folder:
             return b""
-        return b"".join(p.read_bytes()[_HEAD:] for p in self._chunks(folder))
+        return b"".join(p.read_bytes()[_HEAD:] for p in self._chunks(folder, channel))
 
     def seal_all(self) -> int:
         """补封上次没正常收尾的录音块。返回补了几块。"""
         n = 0
-        for part in self.root.glob("*/mic-*.wav.part"):
+        for part in self.root.glob("*/*-*.wav.part"):
             try:
                 _seal(part)
                 n += 1
@@ -138,8 +141,10 @@ class Recorder:
     chunk_seconds = 60.0
     flush_seconds = 1.0
 
-    def __init__(self, folder: Path, keep: Callable[[], str]):
+    def __init__(self, folder: Path, keep: Callable[[], str], channel: str = "mic"):
         self.folder = folder
+        self.channel = channel
+        self._rows = "" if channel == "mic" else f"{channel}-"    # 麦克风那一路的文件名不带前缀（和以前一样）
         self.keep = keep                            # 每次写都问一下：会开到一半改成「不留」，后面的就不写了
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="recorder")
         self._pending = bytearray()
@@ -157,10 +162,10 @@ class Recorder:
             self._flush()
 
     def heard(self, row: dict) -> None:
-        self._submit(self._append_row, "heard", row)
+        self._submit(self._append_row, self._rows + "heard", row)
 
     def event(self, **row) -> None:
-        self._submit(self._append_row, "timeline", row)
+        self._submit(self._append_row, self._rows + "timeline", row)
 
     def sync(self) -> None:
         """把攒下的都写下去并等写完（不收尾）。"""
@@ -199,7 +204,7 @@ class Recorder:
             self._failed = True
 
     def _part(self, index: int) -> Path:
-        return self.folder / f"mic-{index:04d}.wav.part"
+        return self.folder / f"{self.channel}-{index:04d}.wav.part"
 
     def _append_audio(self, index: int, data: bytes) -> None:
         part = self._part(index)

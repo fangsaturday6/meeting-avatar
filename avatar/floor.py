@@ -283,29 +283,39 @@ class Floor:
             self._resume("（刚才打断你的只是一阵杂音，没有人说话，你已经把话接着说完：「{said}」）")
 
     async def on_utterance(self, text: str, embedding=None, speaker_name: str | None = None,
-                           seconds: float = 10.0, at: float | None = None) -> Line | None:
-        """有人说完了一句话。返回字幕行；被判为回声则返回 None。at：这句话从录音的第几秒开始。"""
+                           seconds: float = 10.0, at: float | None = None, source: str | None = None) -> Line | None:
+        """有人说完了一句话。返回字幕行；被判为回声则返回 None。at：这句话从录音的第几秒开始。
+
+        source：typed（打字的、Agent 注入的，给了 speaker_name 时默认是它）/ mic（麦克风听来的）/
+        system（这台电脑放出的声音：你在电脑上开线上会时，线上的人在这一路，它自己说的话也会混进来）。
+        speaker_name 和 mic 一起给，是已经知道是谁在说（开线上会时麦克风那一路就是你）。
+        """
+        source = source or ("typed" if speaker_name else "mic")
+        heard = source != "typed"
         text = fix_name(text.strip(), self.m.settings.name)
         if not self.m.active or not text:
             return None
         overlapped, self._overlap = self._overlap, False
-        if speaker_name is None and overlapped and self._is_echo(text):
+        # 系统声音里它自己的话是原样录进来的，不一定和人声重叠（它说的时候这一路不算人声），所以总要查
+        if heard and (overlapped or source == "system") and self._is_echo(text):
             if self.clock() - self._last_barge < 4:
                 # 自己的回声把自己打断了：把没说完的话接着说完
                 self._resume("（刚才是音箱回声把你打断了，并没有人插话，你已经把话接着说完：「{said}」）")
             return None
 
         sid = self.m.speakers.by_name(speaker_name) if speaker_name else self.m.speakers.assign(embedding, seconds)
-        if speaker_name is None:
+        if heard:
             # 每句话留一行：多长、认成了谁、和每个人有多像。识别不准、同一个人被分成两位时靠它查
             scores = sorted(self.m.speakers.last_scores.items(), key=lambda kv: -kv[1])[:3]
-            log.info("听到 [%s] %.1f秒｜%s｜声纹：%s", self.m.speakers.name_of(sid), seconds, text,
-                     "、".join(f"{n} {v:.2f}" for n, v in scores) or ("第一位" if embedding is not None else "太短，沿用上一位"))
+            who = ("这一路就是他" if speaker_name else "、".join(f"{n} {v:.2f}" for n, v in scores)
+                   or ("第一位" if embedding is not None else "太短，沿用上一位"))
+            log.info("听到%s [%s] %.1f秒｜%s｜声纹：%s", "（系统声音）" if source == "system" else "",
+                     self.m.speakers.name_of(sid), seconds, text, who)
         self.m.emit("speaker", speaker=self.m.speakers.speakers[sid].to_dict())
         command = record_command(text, self.m.settings.name)
         if command is False:
             self.m.set_recording(False)          # 「这段别记」这句本身也不记
-        line = self.m.add_line("human", text, sid, seconds if speaker_name is None else 0.0, at=at)
+        line = self.m.add_line("human", text, sid, seconds if heard else 0.0, at=at)
         if command is not None:
             # 对它的指令，不用大脑想：应一声就行。之后的话照样听、照样接，只是不进记录、不录音
             if command:
@@ -422,6 +432,11 @@ class Floor:
         self.m.show_on_board(task.id)
         self._bg_spawn(self._run_task(task, asker))
         return task
+
+    @property
+    def playing(self) -> bool:
+        """它这会儿正在出声。"""
+        return bool(self._attempt and self._attempt.playing)
 
     def _bg_spawn(self, coro) -> None:
         t = asyncio.create_task(coro)

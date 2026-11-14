@@ -85,21 +85,14 @@ class Ears:
         self._live: list[np.ndarray] = []   # 当前这段人声到目前为止的采样（用来中途分辨是谁在说）
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ears")
         self._results: asyncio.Queue | None = None
+        self._inflight = 0                    # 交出去还没识别完、回调完的片段
         self._consumer: asyncio.Task | None = None
 
     # ---- 加载（耗时一两秒，放线程里） ----
     def load(self) -> None:
         import sherpa_onnx as so
 
-        cfg = so.VadModelConfig()
-        cfg.silero_vad.model = str((models.VAD if models.VAD.ready else models.VAD_OLD).path)
-        cfg.silero_vad.threshold = self.vad_threshold
-        cfg.silero_vad.min_silence_duration = self.min_silence
-        cfg.silero_vad.min_speech_duration = self.min_speech
-        cfg.silero_vad.max_speech_duration = self.max_speech
-        cfg.sample_rate = SAMPLE_RATE
-        self._window = cfg.silero_vad.window_size
-        self._vad = so.VoiceActivityDetector(cfg, buffer_size_in_seconds=60)
+        self._make_vad(so)
         self._asr = so.OfflineRecognizer.from_sense_voice(
             model=str(models.ASR.path), tokens=str(models.ASR_TOKENS.path),
             # 语言锁中文：让它自己猜的话，咳嗽、键盘声会被猜成日语、韩语、英语，记录里就多出「ち」「Yeah.」。
@@ -112,6 +105,27 @@ class Ears:
             )
             self.has_speaker_model = True
         self.ready = True
+
+    def borrow(self, other: "Ears") -> None:
+        """另一路声音用的耳朵：断句自己一份，识别和声纹借 other 已经加载好的，也在同一个线程里排队。"""
+        import sherpa_onnx as so
+
+        self._make_vad(so)
+        self._asr, self._spk, self.has_speaker_model = other._asr, other._spk, other.has_speaker_model
+        self._pool.shutdown(wait=False)
+        self._pool = other._pool
+        self.ready = other.ready
+
+    def _make_vad(self, so) -> None:
+        cfg = so.VadModelConfig()
+        cfg.silero_vad.model = str((models.VAD if models.VAD.ready else models.VAD_OLD).path)
+        cfg.silero_vad.threshold = self.vad_threshold
+        cfg.silero_vad.min_silence_duration = self.min_silence
+        cfg.silero_vad.min_speech_duration = self.min_speech
+        cfg.silero_vad.max_speech_duration = self.max_speech
+        cfg.sample_rate = SAMPLE_RATE
+        self._window = cfg.silero_vad.window_size
+        self._vad = so.VoiceActivityDetector(cfg, buffer_size_in_seconds=60)
 
     def reset(self) -> None:
         """换一场会议或换了音频来源时清掉残留状态。"""
@@ -167,6 +181,7 @@ class Ears:
             self._vad.pop()
             at = round(((self._base or 0) + start) / SAMPLE_RATE, 3)
             fut = asyncio.get_running_loop().run_in_executor(self._pool, self._recognize, seg, lead)
+            self._inflight += 1
             self._results.put_nowait((fut, at))
 
     def flush(self) -> None:
@@ -193,6 +208,7 @@ class Ears:
             except Exception:  # noqa: BLE001
                 log.exception("这段话没识别出来")
             finally:
+                self._inflight -= 1
                 self._results.task_done()
 
     # ---- 识别（线程池里） ----
@@ -209,6 +225,11 @@ class Ears:
         if self._spk is not None and len(samples) >= SAMPLE_RATE * self.min_embed_seconds:
             emb = self._embed(samples)
         return text, emb, seconds
+
+    @property
+    def busy(self) -> bool:
+        """有人正在说，或者有一句还在识别：它的文字马上就到。"""
+        return self._speaking or self._inflight > 0
 
     async def who(self) -> np.ndarray | None:
         """现在正在说话的人的声纹。没人在说、说得太短或没有声纹模型时返回 None。"""

@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
+import time
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -20,7 +23,9 @@ VOICES = {
     "zh-CN-XiaoxiaoNeural": "在线·晓晓（女，亲切）",
     "zh-CN-XiaoyiNeural": "在线·晓伊（女，活泼）",
 }
-SCENES = {"room": "当面开会", "online": "线上会议"}
+# room：大家围着这台电脑；call：你在这台电脑上开线上会，它在旁边听（麦克风是你，这台电脑放出的声音是线上的人）；
+# online：它用自己的账号单独入会，靠虚拟声卡听和说
+SCENES = {"room": "当面开会", "call": "我在开线上会", "online": "它单独入会"}
 ROLES = {"companion": "陪我开会", "delegate": "替我开会"}
 # 参与度：只在被叫到时说 / 有实质补充才说 / 每个议题都主动给看法
 ENGAGEMENTS = {"quiet": "少说", "normal": "适中", "active": "多说"}
@@ -116,8 +121,12 @@ class Settings:
 
 
 # ---------- 子进程的网络环境 ----------
+log = logging.getLogger("avatar.config")
 _PROXY_KEYS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY")
+RECHECK = 15.0                      # 记下的代理不通、也没找到通的：隔这么多秒再找，别每起一个子进程都翻一遍终端配置
 _child_env: dict | None = None
+_looked_at = 0.0                    # 上一次「找了一圈没有一个通的」是什么时候；找到通的就清零
+_env_lock = threading.Lock()
 
 
 def _proxy_from_shell() -> dict:
@@ -152,24 +161,84 @@ def _proxy_from_system() -> dict:
     return found
 
 
+def _proxy_in(env: dict) -> str | None:
+    """env 里子进程实际会用的那个代理。"""
+    return env.get("HTTPS_PROXY") or env.get("https_proxy") or env.get("ALL_PROXY") or env.get("all_proxy") or None
+
+
+def _answers(env: dict) -> bool:
+    """env 里的代理是不是还有人在听。没配代理算通。
+
+    只试本机上的（连一下，不通立刻就知道）；别的机器上的一时不通多半是网络抖，不是换了地方，不试。
+    """
+    import socket
+    from urllib.parse import urlsplit
+    url = _proxy_in(env) or env.get("HTTP_PROXY") or env.get("http_proxy")
+    if not url:
+        return True
+    try:
+        parts = urlsplit(url if "://" in url else f"http://{url}")
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return True
+    if host not in ("127.0.0.1", "localhost", "::1") or not port:
+        return True
+    try:
+        socket.create_connection((host, port), timeout=0.5).close()
+    except OSError:
+        return False
+    return True
+
+
+def _with_proxy(base: dict, found: dict) -> dict:
+    """把 base 里的代理整个换成 found 的（大小写两种写法都换）。found 没说哪些地址不走代理时，原来的留着。"""
+    swapped = {k.upper() for k in _PROXY_KEYS[:3]} | {k.upper() for k in found}
+    env = {k: v for k, v in base.items() if k.upper() not in swapped}
+    env.update(found)
+    env.update({k.lower(): v for k, v in found.items()})
+    return env
+
+
+def _lookup() -> dict:
+    """现在该用的环境：自己带着的代理通就用它；不通或没有，依次去终端配置、系统设置里找一个通的。
+
+    一个通的都没有时不乱换：自己带着的留着；自己没带的，用先找到的那个。
+    """
+    env = dict(os.environ)
+    own = any(env.get(k) or env.get(k.lower()) for k in _PROXY_KEYS[:3])
+    if own and _answers(env):
+        return env
+    spare = None
+    for look in (_proxy_from_shell, _proxy_from_system):
+        found = look()
+        if not found:
+            continue
+        candidate = _with_proxy(env, found)
+        if _answers(candidate):
+            return candidate
+        spare = spare or candidate
+    return env if own else (spare or env)
+
+
 def child_env() -> dict:
     """给子进程（本机 claude、curl）用的环境变量。
 
-    从图形界面启动的程序拿不到终端里配置的代理，本机 claude 就会连不上、一直卡住。
-    所以环境里没有代理时，依次去终端配置和系统设置里找，找到就补上。结果只算一次。
+    从图形界面启动的程序拿不到终端里配置的代理，本机 claude 就会连不上、一直卡住；
+    开着不关的后台记着的代理也会过期（换了代理软件、换了端口）。所以每次要用时先看记着的那个还通不通，
+    不通就重新找（见 _lookup）。找一次要读终端配置，可能一两秒：事件循环里用 asyncio.to_thread 调。
     """
-    global _child_env
-    if _child_env is None:
-        env = dict(os.environ)
-        if not any(env.get(k) or env.get(k.lower()) for k in _PROXY_KEYS[:3]):
-            found = _proxy_from_shell() or _proxy_from_system()
-            env.update(found)
-            env.update({k.lower(): v for k, v in found.items()})
-        _child_env = env
-    return dict(_child_env)
+    global _child_env, _looked_at
+    with _env_lock:
+        stale = _child_env is not None and not _answers(_child_env)
+        if _child_env is None or (stale and time.monotonic() - _looked_at >= RECHECK):
+            before = _proxy_in(_child_env) if _child_env else None
+            _child_env = _lookup()
+            _looked_at = 0.0 if _answers(_child_env) else time.monotonic()
+            if stale and _proxy_in(_child_env) != before:
+                log.warning("代理换了地方，之后起的子进程改用新的")
+        return dict(_child_env)
 
 
-def proxy_url() -> str | None:
-    env = child_env()
-    return env.get("HTTPS_PROXY") or env.get("https_proxy") or env.get("ALL_PROXY") or env.get("all_proxy") or None
-
+def proxy_url(env: dict | None = None) -> str | None:
+    """现在该用的代理；给了 env 就只读它（看某个子进程当初带的是哪个）。"""
+    return _proxy_in(child_env() if env is None else env)

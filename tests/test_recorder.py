@@ -110,3 +110,23 @@ def test_old_recordings_are_swept_after_the_time_is_up(tmp_path):
     assert dropped == ["old"]
     assert not store.has_audio("old") and store.has_audio("new") and store.has_audio("crashed")
     assert store.rows("old", "timeline")          # 文字那几份留着
+
+
+def test_the_system_sound_is_a_separate_track(tmp_path):
+    store = AudioStore(tmp_path)
+    mic = rec(store)
+    sysr = Recorder(store.folder("m1"), keep=lambda: "always", channel="system")
+    sysr.chunk_seconds = 1.0
+    mic.write(pcm(1.5))
+    sysr.write(pcm(0.5, start=7))
+    mic.heard({"text": "我说的"})
+    sysr.heard({"text": "线上的人说的"})
+    sysr.event(event="start", at=0.0)
+    mic.close(); sysr.close()
+    names = sorted(p.name for p in store.folder("m1").iterdir())
+    assert names == ["heard.jsonl", "mic-0000.wav", "mic-0001.wav", "system-0000.wav", "system-heard.jsonl",
+                     "system-timeline.jsonl"]
+    assert store.pcm("m1") == pcm(1.5) and store.pcm("m1", "system") == pcm(0.5, start=7)
+    assert store.rows("m1", "system-heard") == [{"text": "线上的人说的"}]
+    store.drop_audio("m1")
+    assert not store.has_audio("m1") and store.pcm("m1", "system") == b""

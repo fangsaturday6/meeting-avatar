@@ -35,6 +35,7 @@ class SpeakerBook:
         self.threshold = threshold
         self.speakers: dict[int, Speaker] = {}
         self.last_id: int | None = None
+        self._last_voice: int | None = None       # 最近一位靠声音认出来的（按名字定的人不算），短句沿用的是他
         self.last_scores: dict[str, float] = {}   # 最近一段声音和每位已知说话人有多像（查「为什么认成了他」用）；没有声纹时是空的
         self._next = 1
 
@@ -45,8 +46,9 @@ class SpeakerBook:
         return sp
 
     def _reuse_last(self) -> int:
-        if self.last_id is None:
-            self.last_id = self._new().id
+        if self._last_voice not in self.speakers:
+            self._last_voice = self._new().id
+        self.last_id = self._last_voice
         self.speakers[self.last_id].count += 1
         return self.last_id
 
@@ -67,7 +69,7 @@ class SpeakerBook:
             if sim > best_sim:
                 best, best_sim = sp, sim
         if best is None or best_sim < self.threshold:
-            if not reliable and self.last_id is not None:
+            if not reliable and self._last_voice in self.speakers:
                 return self._reuse_last()      # 短句对不上谁：多半还是刚才那位
             best = self._new()
             best.centroid = e
@@ -76,7 +78,7 @@ class SpeakerBook:
             w = min(best.count, 20)
             best.centroid = _unit(best.centroid * w + e)
         best.count += 1
-        self.last_id = best.id
+        self.last_id = self._last_voice = best.id
         return best.id
 
     def similarity(self, speaker_id: int, embedding: np.ndarray) -> float:
@@ -112,12 +114,16 @@ class SpeakerBook:
         a.count += b.count
         if self.last_id == src:
             self.last_id = dst
+        if self._last_voice == src:
+            self._last_voice = dst
         return a
 
     def forget(self, speaker_id: int) -> None:
         self.speakers.pop(speaker_id, None)
         if self.last_id == speaker_id:
             self.last_id = None
+        if self._last_voice == speaker_id:
+            self._last_voice = None
 
     def name_of(self, speaker_id: int | None) -> str:
         sp = self.speakers.get(speaker_id) if speaker_id is not None else None

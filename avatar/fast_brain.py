@@ -10,7 +10,7 @@ import logging
 import os
 from typing import AsyncIterator, Callable
 
-from .config import WORKSPACE, Settings, child_env
+from .config import WORKSPACE, Settings, child_env, proxy_url
 from .redact import Redactor, login_email
 
 log = logging.getLogger("avatar.brain")
@@ -205,6 +205,7 @@ class FastBrain:
         self.recap = recap or (lambda: "")
         self.briefing = briefing or (lambda: "")   # 开会前的背景：项目清单、上次会议纪要
         self._proc: asyncio.subprocess.Process | None = None
+        self._proxy: str | None = None      # 这个进程启动时带的代理：换了地方就得重启，见 ask
         self._inflight = False
         self._req = 0
         # 请求失败正在重试时回调（第几次重试）。网络不稳时界面靠它提示「大脑连不上」
@@ -238,7 +239,8 @@ class FastBrain:
         s = self.settings
         cwd = WORKSPACE / "brain"
         cwd.mkdir(parents=True, exist_ok=True)
-        env = child_env()                  # 带上代理：从图形界面启动时环境里没有
+        env = await asyncio.to_thread(child_env)   # 带上代理：从图形界面启动时环境里没有；可能要读盘找，放线程里
+        self._proxy = proxy_url(env)
         env["MAX_THINKING_TOKENS"] = "0"   # 接话不需要深思，关掉能省近一秒
         # 注意：下面这些参数关不掉命令行自动塞进上下文的那段（登录账号的邮箱、当天日期）。
         # 2.1.205 里没有对应的开关（唯一的旁路 ANTHROPIC_UNIX_SOCKET 会把请求改走本地套接字，不能用），
@@ -274,9 +276,13 @@ class FastBrain:
     # ---- 对话 ----
     async def ask(self, prompt: str) -> AsyncIterator[str]:
         """把新内容送进大脑，返回它的回答（逐段文字）。"""
+        moved = self.alive and await asyncio.to_thread(proxy_url) != self._proxy
+        if moved:
+            # 代理换了地方（换了代理软件、换了端口）：这个进程还带着旧的，怎么重试都连不上
+            await self.stop()
         if not self.alive:
-            # 进程意外退出：重启，并把之前的会议记录补给它
-            log.warning("大脑进程不在了，正在重启")
+            # 进程不在了（意外退出，或者刚因为代理换了被收掉）：重启，并把之前的会议记录补给它
+            log.warning("代理换了地方，大脑重启后接着用" if moved else "大脑进程不在了，正在重启")
             await self._spawn()
             recap = self.recap()
             if recap:

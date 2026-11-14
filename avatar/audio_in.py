@@ -20,14 +20,20 @@ if TYPE_CHECKING:
     from .meeting import Line, Meeting
 
 log = logging.getLogger("avatar.audio")
-MAGIC = b"PCM1"
+MAGICS = {"mic": b"PCM1", "system": b"SYS1"}      # 帧头：哪一路的声音
 
 
 class AudioIn:
-    silent_after = 5.0       # 当面开会时连续这么多秒一个采样都是 0，就是麦克风被关了、没权限或者音轨死了
+    """一路声音一个。channel：mic（麦克风）/ system（这台电脑放出的声音，你在电脑上开线上会时听线上的人）。"""
 
-    def __init__(self, meeting: "Meeting", ears: "Ears", store: AudioStore):
+    def __init__(self, meeting: "Meeting", ears: "Ears", store: AudioStore, channel: str = "mic"):
         self.m, self.ears, self.store = meeting, ears, store
+        self.channel = channel
+        self._magic = MAGICS[channel]
+        # 麦克风连续 5 秒一个采样都是 0：被关了、没权限或者音轨死了。
+        # 系统声音没人说话时本来就是 0，所以放宽到一分钟：一场线上会一分钟都没声音，多半是没给系统录音的权限
+        self.silent_after = 5.0 if channel == "mic" else 60.0
+        self._health = "mic_health" if channel == "mic" else "system_health"
         self._rec: Recorder | None = None
         self._rec_id = ""
         self.samples = 0                 # 这场会录到第几个采样（录音时钟）
@@ -37,7 +43,7 @@ class AudioIn:
 
     # ---- 声音 ----
     def feed(self, data: bytes) -> None:
-        seq, pcm = self._split(data)
+        seq, pcm = self._split(data, self._magic)
         if self.m.record_id != self._rec_id:
             self._begin()
         if seq is not None:
@@ -52,8 +58,8 @@ class AudioIn:
         self.samples += len(pcm) // 2
 
     @staticmethod
-    def _split(data: bytes) -> tuple[int | None, bytes]:
-        if len(data) >= 8 and data[:4] == MAGIC:
+    def _split(data: bytes, magic: bytes = MAGICS["mic"]) -> tuple[int | None, bytes]:
+        if len(data) >= 8 and data[:4] == magic:
             return struct.unpack_from("<I", data, 4)[0], data[8:]
         return None, data
 
@@ -69,17 +75,17 @@ class AudioIn:
             self._event("restart")        # 页面刷新或换了窗口，序号从头数
 
     def _watch(self, pcm: bytes) -> None:
-        if self.m.settings.scene != "room":
-            return                         # 线上会议的声音来自虚拟声卡，没人说话时本来就是全零
+        if self.channel == "mic" and self.m.settings.scene == "online":
+            return                         # 它单独入会时听的是虚拟声卡，没人说话时本来就是全零
         if pcm.count(0) == len(pcm):
             self._zeros += len(pcm) // 2
-            if self._zeros >= self.silent_after * RATE and self.m.mic_health != "silent":
-                log.info("麦克风送来的一直是数字静音，它现在听不到")
-                self.m.set_flag("mic_health", "silent")
+            if self._zeros >= self.silent_after * RATE and getattr(self.m, self._health) != "silent":
+                log.info("%s送来的一直是数字静音", "麦克风" if self.channel == "mic" else "系统声音")
+                self.m.set_flag(self._health, "silent")
         else:
             self._zeros = 0
-            if self.m.mic_health != "ok":
-                self.m.set_flag("mic_health", "ok")
+            if getattr(self.m, self._health) != "ok":
+                self.m.set_flag(self._health, "ok")
 
     # ---- 一场会的开始和结束 ----
     def _begin(self) -> None:
@@ -87,7 +93,8 @@ class AudioIn:
         self._rec_id = self.m.record_id
         if self._rec_id:
             try:
-                self._rec = Recorder(self.store.folder(self._rec_id), keep=lambda: self.m.settings.keep_audio)
+                self._rec = Recorder(self.store.folder(self._rec_id), keep=lambda: self.m.settings.keep_audio,
+                                     channel=self.channel)
             except OSError:
                 log.exception("录音目录建不了，这场会只记文字")
             self._event("start", wall=time.time())
@@ -101,16 +108,17 @@ class AudioIn:
                 self.store.drop_audio(self._rec_id)
         self._rec, self._rec_id = None, ""
         self.samples, self._seq, self._zeros, self._on = 0, None, 0, True
-        if self.m.mic_health != "ok":
-            self.m.set_flag("mic_health", "ok")
+        if getattr(self.m, self._health) != "ok":
+            self.m.set_flag(self._health, "ok")
 
     def _event(self, name: str, **extra) -> None:
         if self._rec:
             self._rec.event(event=name, at=round(self.samples / RATE, 3), **extra)
 
     # ---- 听到的话 ----
-    def heard(self, text: str, emb, seconds: float, at: float | None, line: "Line | None") -> None:
-        """记一句识别结果：在录音里的位置、文字、归给了谁、声纹。line 为空说明被判成了回声。"""
+    def heard(self, text: str, emb, seconds: float, at: float | None, line: "Line | None", known: bool = False) -> None:
+        """记一句识别结果：在录音里的位置、文字、归给了谁、声纹。line 为空说明被判成了回声。
+        known：是谁说的不靠声纹，本来就知道（你在电脑上开线上会时，麦克风那一路就是你）。"""
         if not self._rec or not self.m.recording or (line is not None and line.off):
             return
         self._rec.heard({
@@ -120,6 +128,7 @@ class AudioIn:
             "line_id": line.id if line else None,
             "speaker_id": line.speaker_id if line else None,
             "echo": line is None,
+            "known": known,
             "emb": None if emb is None else base64.b64encode(np.asarray(emb, dtype=np.float32).tobytes()).decode(),
         })
 

@@ -91,6 +91,7 @@ export function emptyState() {
     status: 'off', started_at: 0, muted: false, brain_ok: true, stage_online: false, humans_speaking: false,
     mic_online: true,   // 接通声音的窗口有没有把麦克风的声音送到后台；后台没报之前先当它有
     mic_health: 'ok',   // silent = 送来的一直是数字静音（麦克风被关了、没权限）
+    system_health: 'ok',   // 「我在开线上会」时这台电脑放出的声音；silent = 一分钟都是零
     recording: true,    // 假 = 有人说了「这段别记」：照样听，但不进记录、不录音
     settings: {}, speakers: [], lines: [], tasks: [], board_task_id: null,
     meetings: [], record_id: '', minuting: [], minutes_result: null, projects: { root: '', names: [] },

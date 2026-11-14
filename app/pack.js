@@ -31,6 +31,7 @@ plist('CFBundleName', NAME);
 plist('CFBundleDisplayName', NAME);
 plist('CFBundleIdentifier', 'local.meeting-avatar');
 plist('NSMicrophoneUsageDescription', '开会时用麦克风听大家说话。');
+plist('NSAudioCaptureUsageDescription', '你在这台电脑上开线上会时，听会议里其他人说话。');
 const icon = path.join(__dirname, 'icon.png');
 if (fs.existsSync(icon)) {
   const set = path.join(__dirname, 'dist/icon.iconset');

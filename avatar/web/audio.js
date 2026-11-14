@@ -3,15 +3,17 @@
 
 const MIC_STALL = 1500;      // 麦克风正常每 40 毫秒来一包声音；这么久没有新的，就当它断了
 const GONE = ['NotFoundError', 'OverconstrainedError'];
-const FRAME_MAGIC = new TextEncoder().encode('PCM1');
+const MIC_MAGIC = new TextEncoder().encode('PCM1');
+const SYS_MAGIC = new TextEncoder().encode('SYS1');     // 这台电脑放出的声音（「我在开线上会」时听线上的人）
 
-// onMic(error)：麦克风自己断过之后重新接的结果，接上了是 null
-export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onMic = () => {} }) {
+// onMic(error)：麦克风自己断过之后重新接的结果，接上了是 null；onSystem(error)：系统声音那一路接没接上
+export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onMic = () => {}, onSystem = () => {} }) {
   let ws = null, wantOpen = false, replaced = false, retry = null;
   let want = { scene: 'room', micId: '', speakerId: '' };     // 上一次要接的场合和设备
   let micStream = null, micCtx = null, micJob = Promise.resolve();
   let micAt = 0, micBusy = 0, micFallback = false, micWatch = 0, lastCheck = 0;
   let seq = 0;                 // 每采到一包加一，发不出去的也占号：后台看到跳号就知道中间丢了声音
+  let sysStream = null, sysCtx = null, sysSeq = 0, sysJob = Promise.resolve();
   let outCtx = null, analyser = null, outEl = null;
   let queue = [], current = null, generation = 0, decodeChain = Promise.resolve();
   let raf = 0;
@@ -50,10 +52,10 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onM
 
   function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
 
-  // 声音帧：「PCM1」+ 4 字节小端序号 + 16k 单声道 16 位 PCM（格式见 README）
-  function frame(n, pcm) {
+  // 声音帧：「PCM1」（系统声音是「SYS1」）+ 4 字节小端序号 + 16k 单声道 16 位 PCM（格式见 README）
+  function frame(n, pcm, magic = MIC_MAGIC) {
     const out = new Uint8Array(8 + pcm.byteLength);
-    out.set(FRAME_MAGIC, 0);
+    out.set(magic, 0);
     new DataView(out.buffer).setUint32(4, n >>> 0, true);
     out.set(new Uint8Array(pcm), 8);
     return out.buffer;
@@ -143,7 +145,7 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onM
     node.port.onmessage = (e) => {
       micAt = performance.now();
       const n = seq++;
-      if (ws && ws.readyState === 1) ws.send(frame(n, e.data.pcm));
+      if (ws && ws.readyState === 1) ws.send(frame(n, e.data.pcm, MIC_MAGIC));
       onMicLevel(Math.min(1, e.data.level * 3));
     };
     const mute = ctx.createGain();
@@ -151,6 +153,48 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onM
     ctx.createMediaStreamSource(stream).connect(node).connect(mute).connect(ctx.destination);
     stream.getAudioTracks()[0].addEventListener('ended', healMic);     // 设备被拔掉
     await ctx.resume();
+  }
+
+  // ---------- 这台电脑放出的声音（「我在开线上会」）----------
+  // 桌面应用里由主进程把系统声音回环交给页面（必须同时要画面，拿到就关掉）。回声消除、降噪、增益都关：
+  // 线上会议软件已经处理过，再处理只会伤识别。它自己说的话也会被录进来，后台按文字挡掉
+  async function openSystem() {
+    stopSystem();
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: true,
+    });
+    stream.getVideoTracks().forEach((t) => t.stop());
+    if (!stream.getAudioTracks().length) { stream.getTracks().forEach((t) => t.stop()); throw new Error('no system audio'); }
+    let ctx;
+    try { ctx = new AudioContext({ sampleRate: 16000 }); } catch { ctx = new AudioContext(); }
+    await ctx.audioWorklet.addModule('/static/pcm-worklet.js').catch(() => {});
+    if (!live() || want.scene !== 'call') { stream.getTracks().forEach((t) => t.stop()); ctx.close().catch(() => {}); return; }
+    sysStream = stream; sysCtx = ctx;
+    const node = new AudioWorkletNode(ctx, 'pcm');
+    node.port.onmessage = (e) => {
+      const n = sysSeq++;
+      if (ws && ws.readyState === 1) ws.send(frame(n, e.data.pcm, SYS_MAGIC));
+    };
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    ctx.createMediaStreamSource(stream).connect(node).connect(mute).connect(ctx.destination);
+    await ctx.resume();
+  }
+
+  function stopSystem() {
+    if (sysStream) sysStream.getTracks().forEach((t) => t.stop());
+    if (sysCtx) sysCtx.close().catch(() => {});
+    sysStream = sysCtx = null;
+  }
+
+  // 按场景接或松开系统声音。接不上不影响麦克风那一路，结果交给 onSystem
+  function setupSystem() {
+    sysJob = sysJob.catch(() => {}).then(async () => {
+      if (want.scene !== 'call' || !live()) { stopSystem(); onSystem(null); return; }
+      if (sysStream) return;
+      try { await openSystem(); onSystem(null); } catch (e) { onSystem(e); }
+    });
+    return sysJob;
   }
 
   function stopMic() {
@@ -235,6 +279,7 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onM
       try { await setupOutput(speakerId); } catch (e) { outputError = e; }
       wantOpen = true; replaced = false;
       if (!ws || ws.readyState > 1) openSocket();
+      setupSystem();
       await setupMic();
       if (outputError) await setupOutput(speakerId);
     },
@@ -242,6 +287,7 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onM
       if (!wantOpen) return;
       want = { scene, micId, speakerId };
       await setupOutput(speakerId);
+      setupSystem();
       await setupMic();
     },
     // 会议结束后松开麦克风和音频通道，系统的麦克风指示灯随之熄灭
@@ -251,6 +297,7 @@ export function createAudioHost({ onMicLevel, onOutLevel, onCaption, onLink, onM
       clearInterval(micWatch);
       stopPlayback();
       stopMic();
+      stopSystem();
       onMicLevel(0);
       outCtx?.suspend().catch(() => {});    // 开着的音频输出会让电脑一直不休眠；下次开会 setupOutput 会恢复
       if (ws) { ws.onclose = null; ws.close(); ws = null; }

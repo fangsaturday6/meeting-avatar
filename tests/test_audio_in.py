@@ -122,3 +122,34 @@ def test_off_the_record_sound_is_heard_but_not_kept(tmp_path):
     assert len(store.pcm(m.record_id)) == 2 * FRAME * 2         # 录音里只有记录的那两包
     assert store.rows(m.record_id, "heard") == []
     assert [r["event"] for r in store.rows(m.record_id, "timeline")] == ["start", "off", "on", "end"]
+
+
+def sys_frame(seq: int, loud: bool = True) -> bytes:
+    return b"SYS1" + frame(seq, loud)[4:]
+
+
+def test_the_system_channel_has_its_own_track_and_knows_when_it_hears_nothing(tmp_path):
+    s = Settings(); s.scene = "call"
+    m = Meeting(s)
+    m.status, m.record_id = "listening", "2026-11-14_100000"
+    store = AudioStore(tmp_path)
+    ears = FakeEars()
+    audio = AudioIn(m, ears, store, channel="system")
+    audio.silent_after = 0.4                      # 测试里缩短：正式是一分钟都没听到线上任何声音
+    for seq in range(12):
+        audio.feed(sys_frame(seq, loud=False))
+    assert m.system_health == "silent" and m.mic_health == "ok"     # 线上的声音一直是零：多半没给系统录音权限
+    audio.feed(sys_frame(12))
+    assert m.system_health == "ok"
+    audio.heard("线上的人说的", None, 1.0, 0.1, Line(id=3, t=0, who="human", text="线上的人说的", speaker_id=1))
+    audio.finish()
+    assert len(store.pcm(m.record_id, "system")) == 13 * FRAME * 2 and store.pcm(m.record_id) == b""
+    assert store.rows(m.record_id, "system-heard")[0]["line_id"] == 3
+    assert [r["event"] for r in store.rows(m.record_id, "system-timeline")] == ["start", "end"]
+
+
+def test_in_a_call_the_mic_is_watched_for_digital_silence_too(tmp_path):
+    m, ears, store, audio = setup(tmp_path, scene="call")
+    for seq in range(int(5 / 0.04)):
+        audio.feed(frame(seq, loud=False))
+    assert m.mic_health == "silent"

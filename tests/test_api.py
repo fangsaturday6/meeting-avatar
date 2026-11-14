@@ -672,3 +672,84 @@ def test_off_the_record_over_the_api(client):
     assert st["recording"] is False and st["lines"][0]["off"] is True
     client.post("/api/record", json={"on": True})
     assert client.get("/api/state").json()["recording"] is True
+
+
+def sys_frames(n: int, start: int = 0, loud: int = 600) -> list[bytes]:
+    return [b"SYS1" + f[4:] for f in frames(n, start, loud)]
+
+
+def test_in_a_call_the_mic_is_you_and_the_system_sound_is_everyone_else(client):
+    import functools
+    hub = client.hub
+    hub.brain.replies = ["[静]"] * 20
+    client.patch("/api/settings", json={"scene": "call", "owner": "老方"})
+    client.post("/api/meeting/start")
+    rid = client.get("/api/state").json()["record_id"]
+    with client.websocket_connect("/ws/audio") as stage:
+        for f, g in zip(frames(20), sys_frames(20)):
+            stage.send_bytes(f)
+            stage.send_bytes(g)
+        deadline = time.time() + 3
+        while (hub.audio.samples < 20 * 640 or hub.system_audio.samples < 20 * 640) and time.time() < deadline:
+            time.sleep(0.01)
+        mine = client.portal.call(functools.partial(hub._heard, "我先说两句", None, seconds=1.2, at=0.1))
+        theirs = client.portal.call(functools.partial(hub._heard_system, "我们这边没问题", None, seconds=1.6, at=0.3))
+    assert mine.speaker == "老方" and theirs.speaker != "老方"
+    client.post("/api/meeting/stop")
+    store = hub.audio_store
+    assert len(store.pcm(rid)) == 20 * 1280 and len(store.pcm(rid, "system")) == 20 * 1280
+    assert store.rows(rid, "heard")[0]["known"] is True
+    assert store.rows(rid, "system-heard")[0]["text"] == "我们这边没问题"
+
+
+def test_system_frames_are_ignored_unless_you_are_in_a_call(client):
+    hub = client.hub
+    client.post("/api/meeting/start")
+    with client.websocket_connect("/ws/audio") as stage:
+        for g in sys_frames(5):
+            stage.send_bytes(g)
+        stage.send_bytes(frames(1)[0])
+        deadline = time.time() + 2
+        while hub.audio.samples < 640 and time.time() < deadline:
+            time.sleep(0.01)
+    assert hub.system_audio.samples == 0
+
+
+def test_two_channels_make_one_signal_and_its_own_voice_never_cuts_it_off(client):
+    hub = client.hub
+    client.post("/api/meeting/start")
+    hub._speech("mic", True)
+    hub._speech("system", True)
+    hub._speech("mic", False, 0.5)
+    assert hub.meeting.humans_speaking                       # 线上的人还在说
+    hub._speech("system", False, 0.5)
+    assert not hub.meeting.humans_speaking
+    hub.floor._attempt = type("A", (), {"playing": True})()  # 它正在说：这时系统声音里有它自己
+    hub._speech("system", True)
+    assert not hub.meeting.humans_speaking
+    hub.floor._attempt = None
+
+
+def test_in_a_call_what_leaks_from_the_speakers_into_the_mic_is_dropped(client):
+    """没戴耳机：线上的人说的话从扬声器漏进麦克风，又被当成你说的记一遍。对得上系统声音里的话就丢掉。"""
+    import asyncio
+    import functools
+    hub = client.hub
+    hub.brain.replies = ["[静]"] * 20
+    client.patch("/api/settings", json={"scene": "call", "owner": "老方"})
+    client.post("/api/meeting/start")
+    heard = lambda fn, text: client.portal.call(functools.partial(fn, text, None, seconds=2.0, at=1.0))  # noqa: E731
+    assert heard(hub._heard_system, "登录页的接口下周三可以联调").speaker != "老方"
+    assert heard(hub._heard, "登录页的接口下周三可以连掉") is None          # 漏进来的
+    assert heard(hub._heard, "好的我这边没问题").speaker == "老方"
+
+    async def mic_first():
+        hub.system_ears._speaking = True                   # 线上的人还在说，那句的文字还没出来
+        mic = asyncio.create_task(hub._heard("另外支付那块还要再等一周", None, seconds=2.0, at=5.0))
+        await asyncio.sleep(0.1)
+        await hub._heard_system("另外支付那块还要再等一周", None, seconds=2.0, at=5.0)
+        hub.system_ears._speaking = False
+        return await mic
+    assert client.portal.call(mic_first) is None
+    texts = [l["text"] for l in client.get("/api/state").json()["lines"]]
+    assert texts.count("另外支付那块还要再等一周") == 1

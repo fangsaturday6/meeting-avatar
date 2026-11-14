@@ -32,7 +32,8 @@
 这个目录不进 git，Grep / Glob 默认搜不到，先 `ls workspace/meetings/` 再按路径读。
 文件由 `avatar/archive.py` 写；后台在跑时也可以走 `GET /api/meetings`、`GET /api/meetings/latest`。
 同名的录音目录在 `workspace/audio/<会议编号>/`（`avatar/recorder.py` 写）：原始声音 `mic-*.wav`（可能已按设置删掉）、
-`heard.jsonl`（每句识别原文、在录音里的秒数、认成了谁、声纹）、`timeline.jsonl`（哪里丢过声音）。
+`heard.jsonl`（每句识别原文、在录音里的秒数、认成了谁、声纹）、`timeline.jsonl`（哪里丢过声音）；
+场景是「我在开线上会」（`call`）时还有这台电脑放出的声音那一轨，文件名前面带 `system-`。
 查「识别错了 / 认错人了」时，`heard.jsonl` 比 Markdown 里并过段、去过语气词的对话更接近原始结果。
 
 ## 界面怎么看、怎么改

@@ -32,9 +32,10 @@ from .mouth import Mouth
 from .recluster import Item, recluster
 from .recorder import AudioStore
 from .slow_brain import SlowBrain
-from .textutil import TASK_KINDS
+from .textutil import TASK_KINDS, echo_score
 
 log = logging.getLogger("avatar.api")
+LEAK_SCORE = 0.6         # 开线上会时，麦克风里这一句有这么大比例和系统声音里刚说的话对得上，就是从扬声器漏进来的
 MINUTES_MIN_LINES = 3     # 别人至少说了这么多句，结束时才自动整理纪要
 BACKFILL = 10             # 启动时最多给这么多场没有纪要的旧会补纪要
 MIC_SILENT_AFTER = 3.0    # 形象页连着、麦克风的声音却这么多秒没送来，就算它听不到了（正常每 40 毫秒一包）
@@ -131,17 +132,60 @@ class Hub:
         self.polishing: dict[str, asyncio.Task] = {}    # 纪要已经有了、整理稿还在写的会议
         self._bg: set[asyncio.Task] = set()
         self._projects: list[knowledge.Project] = []    # 它认识的项目（扫盘要一两秒，只在后台线程里刷新）
-        self.ears = Ears(self.floor.on_speech_start, self.floor.on_speech_end, self._heard)
+        # 两路声音：麦克风；「我在开线上会」时还有这台电脑放出的声音（线上的人）。两路各一个耳朵，识别模型共用
+        self._talking = {"mic": False, "system": False}
+        self._system_said: list[tuple[float, str]] = []    # 系统声音里最近认出的话（时刻、文字），用来认出漏进麦克风的
+        self.ears = Ears(lambda: self._speech("mic", True), lambda ago=0.0: self._speech("mic", False, ago), self._heard)
+        self.system_ears = Ears(lambda: self._speech("system", True), lambda ago=0.0: self._speech("system", False, ago),
+                                self._heard_system)
         self.floor.voice_probe = self.ears.who
         self.audio_store = audio_store or AudioStore()
         self.audio = AudioIn(self.meeting, self.ears, self.audio_store)    # 形象页送来的声音都从这里进
+        self.system_audio = AudioIn(self.meeting, self.system_ears, self.audio_store, channel="system")
         self.ready = {"ears": False, "speakers": False, "local_voice": False}
 
+    def _speech(self, channel: str, on: bool, ago: float = 0.0) -> None:
+        """两路声音合成一个「有没有人在说话」交给接话逻辑：哪一路有人说就算有，两路都停了才算停。"""
+        if channel == "system" and on and self.floor.playing:
+            return      # 它自己说话的声音也在系统声音里：这时这一路不算人声，不然它会把自己打断
+        was = any(self._talking.values())
+        self._talking[channel] = on
+        now = any(self._talking.values())
+        if now and not was:
+            self.floor.on_speech_start()
+        elif not now and (was or self.meeting.humans_speaking):
+            self.floor.on_speech_end(ago)
+
     async def _heard(self, text: str, embedding=None, seconds: float = 10.0, at: float | None = None):
-        """耳朵认出一句话：交给接话逻辑，再把识别结果连同声纹记进这场会的录音目录。"""
-        line = await self.floor.on_utterance(text, embedding, seconds=seconds, at=at)
+        """麦克风认出一句话：交给接话逻辑，再把识别结果连同声纹记进这场会的录音目录。
+        你在电脑上开线上会时，麦克风那一路就是你，不用靠声纹猜。"""
+        known = self.settings.scene == "call"
+        if known and await self._leaked(text):
+            log.info("麦克风里漏进了线上的声音，不算你说的：%s", text)
+            return None
+        name = (self.settings.owner.strip() or "我") if known else None
+        line = await self.floor.on_utterance(text, embedding, speaker_name=name, seconds=seconds, at=at, source="mic")
         if self.meeting.active:
-            self.audio.heard(text, embedding, seconds, at, line)
+            self.audio.heard(text, embedding, seconds, at, line, known=known)
+        return line
+
+    async def _leaked(self, text: str) -> bool:
+        """没戴耳机时，线上的人说的话会从扬声器漏进麦克风。和系统声音里刚说的对得上就是漏进来的。
+        线上的人正在说（或那句还在识别）时先等它交出来再比，最多等两秒。"""
+        deadline = time.monotonic() + 2.0
+        while self.system_ears.busy and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        now = time.monotonic()
+        self._system_said = [(t, s) for t, s in self._system_said if now - t < 20]
+        recent = "".join(s for _, s in self._system_said)
+        return bool(recent) and echo_score(text, recent) >= LEAK_SCORE
+
+    async def _heard_system(self, text: str, embedding=None, seconds: float = 10.0, at: float | None = None):
+        """这台电脑放出的声音里认出一句话：线上的人说的，或者它自己的回声（接话逻辑会挡掉）。"""
+        self._system_said.append((time.monotonic(), text))
+        line = await self.floor.on_utterance(text, embedding, seconds=seconds, at=at, source="system")
+        if self.meeting.active:
+            self.system_audio.heard(text, embedding, seconds, at, line)
         return line
 
     async def recheck_speakers(self) -> int:
@@ -149,7 +193,8 @@ class Hub:
         m = self.meeting
         if not m.record_id or m.active:
             return 0
-        rows = await asyncio.to_thread(self.audio_store.rows, m.record_id, "heard")
+        rows = [*await asyncio.to_thread(self.audio_store.rows, m.record_id, "heard"),
+                *await asyncio.to_thread(self.audio_store.rows, m.record_id, "system-heard")]
         heard = {r["line_id"]: r for r in rows if r.get("line_id") and r.get("emb")}
         items = []
         for line in m.lines:
@@ -159,7 +204,7 @@ class Hub:
             sp = m.speakers.speakers.get(line.speaker_id)
             items.append(Item(line.id, float(row.get("seconds") or line.seconds),
                               np.frombuffer(base64.b64decode(row["emb"]), dtype=np.float32), line.speaker_id,
-                              fixed=line.pinned or bool(sp and sp.locked)))
+                              fixed=line.pinned or bool(sp and sp.locked) or bool(row.get("known"))))
         try:
             changes = await asyncio.to_thread(recluster, items)
         except Exception:  # noqa: BLE001
@@ -174,8 +219,10 @@ class Hub:
         return n
 
     def end_meeting_audio(self) -> None:
-        """会开完了：录音收尾。"""
+        """会开完了：两路录音收尾。"""
         self.audio.finish()
+        self.system_audio.finish()
+        self._talking = {"mic": False, "system": False}
 
     def _after_minutes(self, meeting_id: str, written: bool) -> None:
         """「整理完就删」：整理稿写进记录了（或者这场会没什么可整理的），录音就不留了。"""
@@ -362,6 +409,7 @@ class Hub:
         try:
             if not models.missing(include_optional=False):
                 await asyncio.to_thread(self.ears.load)
+                await asyncio.to_thread(self.system_ears.borrow, self.ears)
                 self.ready["ears"] = True
                 self.ready["speakers"] = self.ears.has_speaker_model
             if hasattr(self.mouth, "load"):
@@ -431,6 +479,7 @@ class Hub:
         self.end_meeting_audio()
         self.meeting.save()
         self.ears.close()
+        self.system_ears.close()
         if hasattr(self.mouth, "close"):
             self.mouth.close()
 
@@ -571,7 +620,9 @@ def create_app(hub: Hub | None = None) -> FastAPI:
     @app.post("/api/meeting/start")
     async def meeting_start():
         hub = h()
-        hub.ears.reset() if hub.ready["ears"] else None
+        if hub.ready["ears"]:
+            hub.ears.reset()
+            hub.system_ears.reset()
         was_active = hub.meeting.active
         await hub.floor.start()
         if not was_active and hub.settings.announce:
@@ -815,10 +866,14 @@ def create_app(hub: Hub | None = None) -> FastAPI:
                 msg = await ws.receive()
                 if msg["type"] == "websocket.disconnect":
                     break
-                if msg.get("bytes") is not None:
+                if (data := msg.get("bytes")) is not None:
+                    if data[:4] == b"SYS1":         # 这台电脑放出的声音：只有「我在开线上会」时才听
+                        if hub.meeting.active and hub.settings.scene == "call":
+                            hub.system_audio.feed(data)
+                        continue
                     mic.heard()
                     if hub.meeting.active:
-                        hub.audio.feed(msg["bytes"])
+                        hub.audio.feed(data)
                 elif msg.get("text"):
                     try:
                         ev = json.loads(msg["text"])

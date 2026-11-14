@@ -76,6 +76,7 @@ class Meeting:
         self.stage_online = False               # 有窗口接通了声音（负责收音和播放）
         self.mic_online = False                 # 那个窗口的麦克风声音确实在送过来（耳机断开时会停）
         self.mic_health = "ok"                  # ok | silent（送来的一直是数字静音：麦克风被关了、没权限）
+        self.system_health = "ok"               # 「我在开线上会」时这台电脑放出的声音：ok | silent（一分钟都是零，多半没给系统录音权限）
         self.humans_speaking = False
         self.private = False                    # 这场会不给智能体看（MCP、下一场会的背景、查会议都读不到）
         self.recording = True                   # 有人说「这段别记」就是假，说「可以记了」再恢复
@@ -309,6 +310,7 @@ class Meeting:
             "stage_online": self.stage_online,
             "mic_online": self.mic_online,
             "mic_health": self.mic_health,
+            "system_health": self.system_health,
             "humans_speaking": self.humans_speaking,
             "private": self.private,
             "recording": self.recording,

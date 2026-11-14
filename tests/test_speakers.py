@@ -100,3 +100,13 @@ def test_merging_moves_the_voice_and_forgets_the_old_number():
     assert list(book.speakers) == [a] and book.speakers[a].count == 2
     assert book.last_id == a
     assert book.assign(np.array([0.1, 1.0]), 4) == a                    # 并过来的声音也认得
+
+
+def test_short_unknown_voices_never_fall_back_to_someone_known_by_name():
+    book = SpeakerBook()
+    other = book.assign(np.array([1.0, 0.0]), 4)
+    me = book.by_name("老方")                       # 麦克风那一路就是我，不靠声纹
+    assert book.assign(None) == other               # 线上一句没声纹的短话：沿用上一位「听出来的」人，不是我
+    book2 = SpeakerBook()
+    me2 = book2.by_name("老方")
+    assert book2.assign(None) != me2

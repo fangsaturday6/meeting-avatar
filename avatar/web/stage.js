@@ -27,6 +27,7 @@ const host = createAudioHost({
   onCaption: (text, done) => { ui.caption = done ? '' : text; renderCaption(); },
   onLink: (link) => { ui.link = link; renderDock(); },
   onMic: (e) => { ui.micError = e ? micProblem(e) : ''; renderAlerts(); },
+  onSystem: (e) => { ui.systemError = !!e; renderAlerts(); },
 });
 
 const isActive = () => state.status !== 'off';
@@ -129,6 +130,10 @@ function renderAlerts() {
       || (deaf() ? (silentMic() ? '麦克风一直是静音，看看是不是被关了' : '麦克风没有声音，它现在只能说、听不到') : '');
     const retry = host.running ? '<button id="btn-mic-retry" type="button">重试</button>' : '';
     if (mic) items.push(['danger', esc(mic) + retry]);
+    // 「我在开线上会」：系统声音那一路没接上，或者一分钟都是零（多半没给系统录音权限）
+    if (isActive() && state.settings.scene === 'call' && (ui.systemError || state.system_health === 'silent')) {
+      items.push(['danger', '听不到线上会议里的人：在系统设置「隐私与安全性 › 录屏与系统录音」里给它打开「仅系统录音」']);
+    }
     if (!state.ready.ears) items.push(['info', '语音模型还没装好，现在只能打字交流']);
     else if (!state.ready.speakers) items.push(['info', '声纹模型还没装好，暂时分不清是谁在说话']);
   }

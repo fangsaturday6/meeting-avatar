@@ -350,7 +350,7 @@ class SlowBrain:
         # 干活的进程同样知道登录邮箱（命令行自动带的，关不掉）：结果和进度上屏、进记录之前过一遍
         guard = Redactor(await asyncio.to_thread(login_email))
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=str(cwd), env=child_env(),
+            *cmd, cwd=str(cwd), env=await asyncio.to_thread(child_env),
             stdin=asyncio.subprocess.DEVNULL if stdin_text is None else asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=16 << 20,
         )
