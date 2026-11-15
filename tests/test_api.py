@@ -591,8 +591,10 @@ def test_it_says_up_front_that_it_keeps_a_record(client):
     assert client.get("/api/state").json()["lines"] == []
 
 
-def test_recordings_older_than_two_hours_are_dropped(client):
-    hub = client.hub
+def test_recordings_older_than_two_hours_are_dropped(tmp_path):
+    # 不启动后台：启动时它自己也会清一遍，机器忙时那一遍会晚到、和这里抢着删
+    hub = Hub(settings=Settings(), brain=FakeBrain([]), mouth=FakeMouth(), worker=FakeWorker(),
+              save_settings=False, archive=Archive(tmp_path), audio_store=AudioStore(tmp_path / "audio"))
     r = hub.audio_store
     from avatar.recorder import Recorder
     rec = Recorder(r.folder("2026-11-01_090000"), keep=lambda: "always")
