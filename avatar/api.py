@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 import numpy as np
 from pydantic import BaseModel, Field
 
-from . import connect, glossary, knowledge, mcp_server, models, rehear
+from . import connect, glossary, knowledge, mcp_server, models, rehear, turns
 from .archive import NO_CONTENT, Archive, checked_citations, dialogue_of, split_minutes
 from .audio_in import AudioIn
 from .config import DESIGN_DIR, ENGAGEMENTS, KEEP_AUDIO, KEEP_HOURS, ROLES, SCENES, VOICES, Settings
@@ -218,21 +218,95 @@ class Hub:
             m.save()
         return n
 
+    async def _heard_rows(self, mid: str) -> dict[int, tuple[str, dict]]:
+        """这场会识别记录里的每一句：{行号: (哪一路声音, 那一行)}。"""
+        out = {}
+        for ch, name in (("mic", "heard"), ("system", "system-heard")):
+            for r in await asyncio.to_thread(self.audio_store.rows, mid, name):
+                if r.get("line_id"):
+                    out[r["line_id"]] = (ch, r)
+        return out
+
+    async def _channel_of(self, mid: str) -> dict[int, str]:
+        """会议记录里每句听来的话来自哪一路声音。散会后切开的句子不在识别记录里，按起点落在哪一句里认。"""
+        rows = await self._heard_rows(mid)
+        out = {lid: ch for lid, (ch, _r) in rows.items()}
+        spans = [(r["at"], r["at"] + (r.get("seconds") or 0.0), ch) for ch, r in rows.values() if r.get("at") is not None]
+        for line in self.meeting.lines:
+            if line.id not in out and line.who == "human" and line.at is not None:
+                ch = next((c for a, b, c in spans if a - 0.05 <= line.at < b), None)
+                if ch:
+                    out[line.id] = ch
+        return out
+
+    async def split_turns(self) -> int:
+        """散会后按声纹找换人的地方（turns.py）：一句里混着几个人的切开，全场再分一次是谁说的。返回动了几句。
+        30 分钟的会要算一千多个小窗的声纹，半分钟左右；和重听一样在后台、和会上共用识别线程排队。"""
+        m, mid = self.meeting, self.meeting.record_id
+        if not mid or m.active or not self.ready["ears"] or not self.ears.has_speaker_model:
+            return 0
+        rows = await self._heard_rows(mid)
+        loop = asyncio.get_running_loop()
+        pool, lead = self.ears._pool, self.ears.lead_in
+        items, where = [], {}
+        try:
+            for line in list(m.lines):
+                got = rows.get(line.id)
+                if line.who != "human" or line.at is None or line.off or got is None or not line.seconds:
+                    continue
+                ch, row = got
+                sp = m.speakers.speakers.get(line.speaker_id)
+                emb = np.frombuffer(base64.b64decode(row["emb"]), dtype=np.float32) if row.get("emb") else None
+                starts = turns.offsets(line.seconds)
+                wins = np.zeros((0, 0), dtype=np.float32)
+                if starts:
+                    pcm = await asyncio.to_thread(self.audio_store.clip, mid, line.at, line.at + line.seconds, ch)
+                    if pcm:
+                        x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+                        wins = await loop.run_in_executor(pool, self.ears.windows, x, starts, turns.WIDTH)
+                if m.record_id != mid or m.active:
+                    return 0
+                items.append(turns.Turn(line.id, line.seconds, wins, emb, line.speaker_id,
+                                        fixed=line.pinned or bool(sp and sp.locked) or bool(row.get("known"))))
+                where[line.id] = (line, ch)
+            changes, plan = await asyncio.to_thread(turns.plan, items)
+            splits = {}
+            for line_id, parts in plan.items():
+                line, ch = where[line_id]
+                head = min(lead, line.at)
+                pcm = await asyncio.to_thread(self.audio_store.clip, mid, line.at - head, line.at + line.seconds, ch)
+                if not pcm:
+                    continue
+                x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+                before = int(round(head * RATE))
+                tokens, times = await loop.run_in_executor(pool, self.ears.timed, x[before:], x[:before])
+                cut = turns.cut_text(tokens, times, parts)
+                if len(cut) > 1:
+                    splits[line_id] = cut
+                elif cut and cut[0][2] != line.speaker_id:
+                    changes[line_id] = cut[0][2]                # 切出来的另一截没有字：整句归一位
+        except Exception:  # noqa: BLE001
+            log.exception("散会后找换人的地方出错，保持原来的结果")
+            return 0
+        if m.record_id != mid or m.active:
+            return 0
+        n = m.apply_speakers(changes, splits)
+        if n:
+            log.info("散会后找换人的地方：切开 %d 句，改判 %d 句", len(splits), n - len(splits))
+            await asyncio.to_thread(m.save)
+        return n
+
     async def rehear(self) -> int:
         """散会后重听一遍（rehear.py）：同一个人接连说的碎句拼起来再认，比会上准。返回换了几段。
         要一两分钟，在后台跑；识别和会上共用一个线程排队，下一场会开起来也不会抢。"""
         m, mid = self.meeting, self.meeting.record_id
         if not mid or m.active or not self.ready["ears"]:
             return 0
-        channel_of = {}
-        for ch, name in (("mic", "heard"), ("system", "system-heard")):
-            for r in await asyncio.to_thread(self.audio_store.rows, mid, name):
-                if r.get("line_id"):
-                    channel_of[r["line_id"]] = ch
+        channel_of = await self._channel_of(mid)
         merged = []
         loop = asyncio.get_running_loop()
         lead = self.ears.lead_in
-        for p in rehear.pieces(m.lines, channel_of):
+        for p in rehear.pieces(m.lines, channel_of, cut=self.ears.max_speech - 0.1):
             pcm = await asyncio.to_thread(self.audio_store.clip, mid, p.start - lead, p.end, p.channel)
             if not pcm:
                 pcm = await asyncio.to_thread(self.audio_store.clip, mid, p.start, p.end, p.channel)
@@ -242,11 +316,17 @@ class Hub:
             if not pcm or m.record_id != mid or m.active:
                 continue
             x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+            y = x[before:]
+            bounds = [0, *rehear.splits(y, RATE), len(y)]       # 拼长了的（硬切过的）切成几截认
+            parts = []
             try:
-                again = await loop.run_in_executor(self.ears._pool, self.ears.recognize, x[before:], x[:before])
+                for a, b in zip(bounds, bounds[1:]):
+                    head = x[:before] if a == 0 else y[:0]      # 切在最轻处，后几截不用往前多带（多带了会认重字）
+                    parts.append(await loop.run_in_executor(self.ears._pool, self.ears.recognize, y[a:b], head))
             except Exception:  # noqa: BLE001
                 log.exception("散会后重听出错，保持会上的结果")
                 return 0
+            again = "".join(parts)
             if rehear.better(p.live, again):
                 merged.append((p.line_ids, again, p.end - p.start))
         if m.record_id != mid or m.active:
@@ -258,7 +338,11 @@ class Hub:
         return n
 
     async def after_meeting(self, meeting_id: str) -> None:
-        """散会后：先重听，再整理纪要（整理稿就拿到更准的原文）。"""
+        """散会后：先按声纹找换人的地方切开，再重听（切开了，同一个人接连说的才拼得对），最后整理纪要。"""
+        try:
+            await self.split_turns()
+        except Exception:  # noqa: BLE001
+            log.exception("散会后找换人的地方出错")
         try:
             await self.rehear()
         except Exception:  # noqa: BLE001

@@ -1,7 +1,9 @@
 """散会后重听：同一个人接连说的碎句拼起来再认一遍。"""
 from avatar.meeting import Line, Meeting
 from avatar.config import Settings
-from avatar.rehear import better, pieces
+import numpy as np
+
+from avatar.rehear import better, pieces, splits
 
 
 def heard(id, at, seconds, speaker=1, text="", who="human"):
@@ -53,3 +55,21 @@ def test_joined_lines_keep_the_first_line_and_its_place():
     assert m.rejoin_lines([([1, 2, 3], "先做登录再做注册", 6.5)]) == 1
     assert [(l.id, l.text, l.seconds, l.at) for l in m.lines] == [(1, "先做登录再做注册", 6.5, 0.0), (4, "好", 0.0, None)]
     assert m.speakers.speakers[sid].count == 1
+
+
+def test_a_line_cut_off_at_twenty_seconds_is_joined_with_what_follows():
+    lines = [heard(1, 0.0, 3.0), heard(2, 3.5, 20.0), heard(3, 23.5, 20.0), heard(4, 43.5, 6.0),   # 说满 20 秒被切了两刀
+             heard(5, 50.0, 2.0)]                                  # 硬切那串之后，照常最长拼 15 秒
+    ps = pieces(lines, {i: "mic" for i in range(1, 6)})
+    assert [(p.line_ids, p.start, p.end) for p in ps] == [([2, 3, 4], 3.5, 49.5)]
+
+
+def test_a_long_piece_is_cut_where_it_is_quietest():
+    rate = 100
+    x = np.ones(40 * rate, dtype=np.float32)
+    x[1190:1220] = 0                                               # 12 秒处停了一下
+    x[2490:2520] = 0.1                                             # 25 秒处轻了一下
+    cuts = splits(x, rate, limit=15.0, frame=0.1)
+    assert len(cuts) == 2 and 1190 <= cuts[0] < 1220 and 2490 <= cuts[1] < 2520
+    assert all(b - a <= 15 * rate for a, b in zip([0, *cuts], [*cuts, len(x)]))
+    assert splits(x[:15 * rate], rate) == []                       # 不超过 15 秒的不切

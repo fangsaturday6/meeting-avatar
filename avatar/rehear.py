@@ -5,6 +5,9 @@
 清楚的段落重认后明显更好，会上漏掉的字也找回来了；听不清的段落两版都是乱码，有时重认反而丢字，
 所以重认的字数比会上少了两成以上就不用，留着会上的。
 
+一口气说满 20 秒的话会被断句硬切（Ears.max_speech），切口常在半个字上，换 silero v6 后约占 8%。
+被硬切的那句和紧接着的下一句也拼起来：拼出来超过 15 秒的，在声音最轻的地方重新切开、一截一截认（splits）。
+
 这是重新识别，不是改字：改字只在整理稿里做（slow_brain.polish）。
 """
 from __future__ import annotations
@@ -12,9 +15,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+import numpy as np
+
 GAP = 1.5          # 两句之间停顿不超过这么多秒，才算接着说
 LIMIT = 15.0       # 拼起来最长这么多秒（SenseVoice 一次认 15 秒左右最稳，断句本身最长切 20 秒）
 KEEP = 0.8         # 重认的字数不到会上的这个比例，就不用
+CUT = 19.9         # 一句有这么长，是说满了被断句硬切的（Ears.max_speech 是 20 秒）
 
 
 @dataclass
@@ -27,28 +33,29 @@ class Piece:
     texts: list[str] = field(default_factory=list)
 
 
-def pieces(lines, channel_of: dict[int, str]) -> list[Piece]:
+def pieces(lines, channel_of: dict[int, str], cut: float = CUT) -> list[Piece]:
     """会议记录里能拼的段落：同一路声音、同一位说话人、紧挨着的几句（中间没有数字人说话、没有打字的）。
+    拼起来最长 LIMIT 秒；前一句是被硬切的（≥ cut 秒），后一句不管多长都接上，拼长了由 splits 重新切。
     只有一句的不用重认（声音和会上一样）。lines 是 Meeting.lines。"""
     out: list[Piece] = []
     cur: Piece | None = None
-    last_speaker = None
+    last_speaker, last_seconds = None, 0.0
     for line in lines:
         ch = channel_of.get(line.id)
         heard = line.who == "human" and line.at is not None and not line.off and ch is not None
         if not heard:
-            cur = None
+            cur, last_seconds = None, 0.0
             continue
         end = line.at + (line.seconds or 0.0)
         if (cur is not None and ch == cur.channel and line.speaker_id == last_speaker
-                and line.at - cur.end <= GAP and end - cur.start <= LIMIT):
+                and line.at - cur.end <= GAP and (end - cur.start <= LIMIT or last_seconds >= cut)):
             cur.line_ids.append(line.id)
             cur.texts.append(line.text)
             cur.end = max(cur.end, end)
         else:
             cur = Piece([line.id], ch, line.at, end, "", [line.text])
             out.append(cur)
-        last_speaker = line.speaker_id
+        last_speaker, last_seconds = line.speaker_id, line.seconds or 0.0
     for p in out:
         p.live = "".join(p.texts)
     return [p for p in out if len(p.line_ids) > 1]
@@ -61,3 +68,18 @@ def _chars(text: str) -> int:
 def better(live: str, again: str) -> bool:
     """重认的能不能用：不能是空的，字数不能比会上少太多（听不清的段落重认时容易丢字）。"""
     return bool(again) and _chars(again) >= KEEP * _chars(live)
+
+
+def splits(x: np.ndarray, rate: int, limit: float = LIMIT, frame: float = 0.02) -> list[int]:
+    """拼长了的一段声音从哪儿切开再认：每截不超过 limit 秒，切在后半截里声音最轻的那一小格的中间。
+    返回切点（第几个采样）；不用切就是空列表。"""
+    n, most, f = len(x), int(limit * rate), max(1, int(frame * rate))
+    cuts, pos = [], 0
+    while n - pos > most:
+        lo, hi = pos + most // 2, pos + most
+        k = (hi - lo) // f
+        energy = (x[lo:lo + k * f].reshape(k, f) ** 2).mean(axis=1)
+        cut = lo + int(np.argmin(energy)) * f + f // 2
+        cuts.append(cut)
+        pos = cut
+    return cuts

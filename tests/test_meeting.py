@@ -112,3 +112,19 @@ async def test_recheck_results_are_applied_and_empty_speakers_disappear():
     assert lines[1].speaker_id == a and new not in (a, b)
     assert set(m.speakers.speakers) == {a, new}                       # 说话人2 一句都不剩了，去掉
     assert m.speakers.speakers[a].count == 2
+
+
+async def test_a_line_two_people_said_is_cut_into_two_lines_in_place():
+    m = Meeting()
+    a, b = m.speakers._new().id, m.speakers._new().id
+    first = m.add_line("human", "我们先做登录", a, seconds=2.0, at=0.2)
+    both = m.add_line("human", "好的那我做注册吧", a, seconds=4.0, at=2.5)
+    last = m.add_line("human", "注册下周给你", b, seconds=2.0, at=7.0)
+    n = m.apply_speakers({}, {both.id: [(0.0, 1.875, a, "好的，"), (1.875, 4.0, -1, "那我做注册吧。")]})
+    assert n == 1
+    got = [(l.text, l.speaker_id, l.at, l.seconds) for l in m.lines]
+    new = m.lines[2].speaker_id
+    assert got == [("我们先做登录", a, 0.2, 2.0), ("好的，", a, 2.5, 1.875),
+                   ("那我做注册吧。", new, 4.375, 2.125), ("注册下周给你", b, 7.0, 2.0)]
+    assert new not in (a, b) and m.lines[1].id == both.id and m.lines[2].id > last.id
+    assert m.speakers.speakers[a].count == 2 and first.speaker_id == a

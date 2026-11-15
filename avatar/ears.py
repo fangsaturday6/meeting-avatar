@@ -118,7 +118,7 @@ class Ears:
 
     def _make_vad(self, so) -> None:
         cfg = so.VadModelConfig()
-        cfg.silero_vad.model = str((models.VAD if models.VAD.ready else models.VAD_OLD).path)
+        cfg.silero_vad.model = str(models.vad_path())
         cfg.silero_vad.threshold = self.vad_threshold
         cfg.silero_vad.min_silence_duration = self.min_silence
         cfg.silero_vad.min_speech_duration = self.min_speech
@@ -249,6 +249,20 @@ class Ears:
         if len(samples) < SAMPLE_RATE * 1.2:
             return None
         return await asyncio.get_running_loop().run_in_executor(self._pool, self._embed, samples)
+
+    def timed(self, samples: np.ndarray, lead: np.ndarray) -> tuple[list[str], list[float]]:
+        """认一遍，返回每个字和它的时间（秒，从 samples 开头算；lead 那一小段里的字是负数）。在线程池里调。"""
+        st = self._asr.create_stream()
+        st.accept_waveform(SAMPLE_RATE, np.concatenate([lead, samples]))
+        self._asr.decode_stream(st)
+        shift = len(lead) / SAMPLE_RATE
+        return list(st.result.tokens), [float(t) - shift for t in st.result.timestamps]
+
+    def windows(self, samples: np.ndarray, starts: list[float], width: float) -> np.ndarray:
+        """一段声音里每个小窗（从 starts 的每一秒起、width 秒长）的声纹，一行一个。在线程池里调。"""
+        n = int(width * SAMPLE_RATE)
+        rows = [self._embed(samples[int(s * SAMPLE_RATE):int(s * SAMPLE_RATE) + n]) for s in starts]
+        return np.stack(rows) if rows else np.zeros((0, 0), dtype=np.float32)
 
     def _embed(self, samples: np.ndarray) -> np.ndarray:
         s = self._spk.create_stream()

@@ -242,23 +242,48 @@ class Meeting:
         line.pinned = True
         return line
 
-    def apply_speakers(self, changes: dict[int, int]) -> int:
-        """把这些句子改判给别的说话人（{行号: 说话人编号}，负数表示新建一位）。返回改了几句。
+    def apply_speakers(self, changes: dict[int, int],
+                       splits: dict[int, list[tuple[float, float, int, str]]] | None = None) -> int:
+        """把这些句子改判给别的说话人（{行号: 说话人编号}，负数表示新建一位）。返回动了几句。
 
+        splits：散会后按声纹切开的句子（turns.py），{行号: [(从这句第几秒, 到第几秒, 说话人编号, 文字), …]}，
+        第一段沿用原来的行号，后面几段是新的行号，排在原来那句的位置上。
         改完重数每位说了几句；一句都不剩、又没被起过名字的说话人去掉。
         """
         created: dict[int, int] = {}
-        n = 0
-        for line in self.lines:
-            if line.who != "human" or line.id not in changes:
-                continue
-            sid = changes[line.id]
+
+        def resolve(sid: int, fallback: int | None) -> int | None:
             if sid < 0:
                 sid = created.setdefault(sid, self.speakers._new().id)
-            if sid not in self.speakers.speakers or sid == line.speaker_id:
+            return sid if sid in self.speakers.speakers else fallback
+
+        n = 0
+        out: list[Line] = []
+        for line in self.lines:
+            parts = (splits or {}).get(line.id) if line.who == "human" else None
+            if parts and len(parts) > 1:
+                for k, (a, b, sid, text) in enumerate(parts):
+                    if k == 0:
+                        piece = line
+                    else:
+                        self._line_id += 1
+                        piece = Line(id=self._line_id, t=line.t + a, who="human", text="", off=line.off)
+                    piece.speaker_id = resolve(sid, line.speaker_id)
+                    piece.speaker = self.speakers.name_of(piece.speaker_id)
+                    piece.text, piece.seconds = text, round(b - a, 3)
+                    piece.at = None if line.at is None else round(line.at + a, 3)
+                    out.append(piece)
+                n += 1
+                continue
+            out.append(line)
+            if line.who != "human" or line.id not in changes:
+                continue
+            sid = resolve(changes[line.id], None)
+            if sid is None or sid == line.speaker_id:
                 continue
             line.speaker_id, line.speaker = sid, self.speakers.name_of(sid)
             n += 1
+        self.lines = out
         if n:
             counts = {sid: 0 for sid in self.speakers.speakers}
             for line in self.lines:

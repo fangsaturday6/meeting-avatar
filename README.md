@@ -51,6 +51,7 @@ uv run python -m avatar             # 启动
 ```
 
 然后用 Chrome 打开 http://127.0.0.1:8765/ ，点「开始」，对它说话。
+以后拉了新代码再跑一次 `uv run python -m avatar.models`，缺的模型（比如换了新版的断句模型）会补上，已有的不重下。
 
 想先看看长什么样，不下载模型、不需要 Claude 也行：
 
@@ -211,9 +212,13 @@ cd app && npm install && npm run pack
 - 散会后、整理纪要之前，它拿整场的声纹重新核对一遍是谁说的（会上只能逐句认，常把一个人拆成几位，也会把两个人并成一位）：
   够长的句子定有几个人（只占全场说话时长不到 5% 的不算一个人），短句跟着最像的走，拿不准的不动；
   你改过名的说话人、单独改判过的句子也不动。
+- 留了录音的话，再按声纹**找换人的地方**：几个人抢着说、不停顿地一个接一个时，会上断成的一句里有好几个人。
+  每句按 1.5 秒的小窗算声纹、全场一起分，一句里换了人就从换人的地方切成两句，各归各的；字不重认，
+  按每个字说出的时间分给前后两句。30 分钟的会要半分钟左右。拿不准时宁可多分出一位：给多出来的那位起另一位的名字就并回去了。
 - 接着把同一个人接连说的碎句拼起来（最长约 15 秒）用同一个识别模型**重听**一遍：会上一停顿就切，句首句尾的字常被削掉，
   拼长了认得准得多（「回家」→「回价」、「请家」→「询价」）。重认出来的字比会上少很多的（听不清的地方）就不用，
-  保留会上的。要一两分钟，在后台做完再整理纪要；没留录音就跳过。
+  保留会上的。一口气说满 20 秒被硬切的话也拼回去，在停顿最轻的地方重新切开再认，切口处的字就不会坏。
+  要一两分钟，在后台做完再整理纪要；没留录音就跳过。
 - 纪要里的结论、待办、没定的事每条后面带出处时刻（`（10:02:30）`），在阅读页点它跳到那段对话；
   记录里没有的时刻会被去掉，不会留下编出来的出处。
 - **录音**另存在 `workspace/audio/<会议编号>/`，和记录同名：原始声音每 60 秒一块（`mic-0000.wav` …，16k 单声道），
@@ -355,6 +360,7 @@ uv run python -m avatar.connect
 | `avatar/ears.py` | 断句、识别（顺手挡掉杂音）、声纹；每句话记下它在录音里的位置 |
 | `avatar/audio_in.py`、`recorder.py` | 声音的入口：解帧、计时、看是不是一直静音、交给识别；录音分块落盘、保留策略 |
 | `avatar/recluster.py` | 会后重聚类：散会后拿整场的声纹重新分一次是谁说的，结果交给 `Meeting.apply_speakers` |
+| `avatar/turns.py` | 散会后找换人的地方：小窗声纹全场聚类，一句里有几个人的切开，结果交给 `Meeting.apply_speakers` |
 | `avatar/rehear.py` | 散会后重听：同一个人接连说的碎句拼起来再认一遍，结果交给 `Meeting.rejoin_lines` |
 | `avatar/replay.py` | 重放评测台：拿存下来的录音喂给真实的耳朵，和会上听到的、和另一套参数逐句比 |
 | `avatar/fast_brain.py` | 快脑：常驻的 Claude Haiku，负责接话。它怎么说话全在这个文件的提示词里 |
@@ -372,6 +378,7 @@ uv run python -m avatar.connect
 | `avatar/web/model.js` | 从 `avatar/web/models/` 加载做好的 3D 形象（GLB 文件），按状态播动作、驱动脸 |
 | `tools/figure.py` | Blender 脚本：给形象绑骨、做每种状态的动作、导出 GLB |
 | `tools/glossary_import.py` | 命令行导入常用词：一份名单或一个公司本体仓库（后台没开着时用） |
+| `tools/meeting_bench.py` | 会议评测台：拿公开会议录音走整条流程，纪要和「理想纪要」对照人工转写逐条评判 |
 | `avatar/web/api.js`、`audio.js` | 接口与状态、收音与播放（两个窗口共用） |
 | `avatar/demo.py` | 演示后台：不需要模型、网络和 Claude，数据放临时目录 |
 | `app/` | 桌面外壳（Electron）：起后台、开窗口、菜单；`pack.js` 打包，`setup.js` 安装 Electron |
@@ -430,6 +437,18 @@ uv run python -m avatar.replay latest --set min_silence=0.6 --save s06   # 换�
 调断句、识别、认人的参数之前，先拿真实的会用 `avatar.replay` 比一比（能调的有 `lead_in`、`min_silence`、
 `min_embed_seconds`、`vad_threshold`、`min_speech`、`max_speech`、`threads`，认人阈值用 `--threshold`）。
 识别要占几个核，别在正开着会的时候跑。
+
+想看整条流程（识别 → 认人 → 散会后核对、找换人、重听 → 纪要）在别人的会上表现如何，用公开的 AliMeeting 评测集
+（[openslr.org/119](https://www.openslr.org/119/) 的 `Eval_Ali.tar.gz`，3.4 GB，8 场中文会议，带逐句人工转写）：
+
+```bash
+tar -xzf Eval_Ali.tar.gz -C ~/.cache/avatar-eval/data Eval_Ali/Eval_Ali_far      # 只要会议桌上麦克风那部分
+uv run python tools/meeting_bench.py run ~/.cache/avatar-eval/data/Eval_Ali      # 8 场约 20 分钟，要用 Claude
+uv run python tools/meeting_bench.py report ~/.cache/avatar-eval/data/Eval_Ali   # 汇总表
+```
+
+每场会出两份纪要：我们整条流程出的，和拿人工转写用同一份提示词出的「理想纪要」；再让 Claude 对照人工转写
+列出要点、逐条判两份纪要的对错（不告诉它哪份是哪份）。另外算识别错字率和认人准不准。结果在 `data/runs/<会议>/`。
 
 ## 实测数据（M1 / 16GB）
 

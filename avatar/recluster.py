@@ -62,6 +62,23 @@ def average_linkage(x: np.ndarray, min_sim: float) -> list[int]:
     return [int(v) for v in dense]
 
 
+def match_ids(overlap: Counter, labels) -> dict[int, int]:
+    """新簇对上会上的说话人编号：重合得越多越优先，一个编号只给一簇；对不上的给负数（要新建一位）。
+    overlap：{(簇, 会上的编号): 重合多少}。"""
+    mapping: dict[int, int] = {}
+    taken: set[int] = set()
+    for (lab, sid), _n in sorted(overlap.items(), key=lambda kv: -kv[1]):
+        if lab not in mapping and sid not in taken:
+            mapping[lab] = sid
+            taken.add(sid)
+    fresh = -1
+    for lab in sorted(labels):
+        if lab not in mapping:
+            mapping[lab] = fresh
+            fresh -= 1
+    return mapping
+
+
 def recluster(items: list[Item], cluster: Callable[[np.ndarray, float], list[int]] = average_linkage,
               min_seconds: float = 2.0, min_sim: float = 0.5, min_share: float = 0.05,
               short_min: float = 0.3, short_margin: float = 0.05) -> dict[int, int]:
@@ -96,20 +113,9 @@ def recluster(items: list[Item], cluster: Callable[[np.ndarray, float], list[int
         if best >= short_min and best - second >= short_margin:
             label_of[it.line_id] = keys[order[0]]
 
-    # 新簇对上会上的编号：重合的句子越多越优先，一个编号只给一簇
     overlap = Counter((label_of[it.line_id], it.speaker_id) for it in voiced
                       if it.line_id in label_of and it.speaker_id is not None)
-    mapping: dict[int, int] = {}
-    taken: set[int] = set()
-    for (lab, sid), _n in sorted(overlap.items(), key=lambda kv: -kv[1]):
-        if lab not in mapping and sid not in taken:
-            mapping[lab] = sid
-            taken.add(sid)
-    fresh = -1
-    for lab in sorted(centroids):
-        if lab not in mapping:
-            mapping[lab] = fresh
-            fresh -= 1
+    mapping = match_ids(overlap, centroids)
 
     changes = {}
     for it in voiced:

@@ -41,10 +41,26 @@ class ModelFile:
         return self.path.exists() and self.path.stat().st_size >= self.min_bytes
 
 
-# 断句。新版（v5）对咳嗽、喘气、挪椅子这类杂音稳得多；没下到就退回旧版，照样能开会，只是杂音多一些。
-VAD = ModelFile("silero_vad_v5.onnx", (f"{_GH}/asr-models/silero_vad_v5.onnx",), 2_000_000, optional=True,
-                sha256="6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396")
+# 断句。v6 起音更早、句首的字不容易被削（2026-11-14 三场真实会议实测错字少 3~9 个百分点）；
+# sherpa-onnx 没收录，从 silero 官方仓库按固定版本取。没下到就用 v5（老用户已有），再没有就退回旧版。
+_SILERO = "snakers4/silero-vad@bfdc0193023f121ea5b3cc7b176dbed570a68a59"     # v6.2
+_SILERO_PATH = "src/silero_vad/data/silero_vad.onnx"
+VAD = ModelFile(
+    "silero_vad_v6.onnx",
+    (f"https://raw.githubusercontent.com/{_SILERO.replace('@', '/')}/{_SILERO_PATH}",
+     f"https://cdn.jsdelivr.net/gh/{_SILERO}/{_SILERO_PATH}"),
+    2_000_000, optional=True,
+    sha256="1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+)
+VAD_V5 = ModelFile("silero_vad_v5.onnx", (f"{_GH}/asr-models/silero_vad_v5.onnx",), 2_000_000, optional=True,
+                   sha256="6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396")
 VAD_OLD = ModelFile("silero_vad.onnx", (f"{_GH}/asr-models/silero_vad.onnx",), 500_000)
+
+
+def vad_path() -> Path:
+    """断句用哪个模型：v6 > v5 > 旧版，有哪个用哪个。"""
+    return next((m.path for m in (VAD, VAD_V5) if m.ready), VAD_OLD.path)
+
 ASR = ModelFile(
     "sense-voice.int8.onnx", (f"{_MS}/model.int8.onnx", f"{_HF}/model.int8.onnx"), 100_000_000,
     sha256="c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",

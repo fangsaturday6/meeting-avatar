@@ -789,3 +789,36 @@ def test_after_the_meeting_broken_up_lines_are_heard_again_before_the_minutes(cl
         time.sleep(0.05)
     text = client.get("/api/meetings/latest").text
     assert "## 纪要" in text and "先做登录，再做注册，然后上线。" in text and "再做注" not in text.replace("再做注册", "")
+
+
+def test_after_the_meeting_a_line_two_people_said_is_cut_between_them(client):
+    import functools
+    import numpy as np
+    hub = client.hub
+    hub.brain.replies = ["[静]"] * 20
+    client.post("/api/meeting/start")
+    a, b = np.eye(4, dtype=np.float32)[:2]
+    with client.websocket_connect("/ws/audio") as stage:
+        for f in frames(250):                                   # 10 秒声音
+            stage.send_bytes(f)
+        deadline = time.time() + 3
+        while hub.audio.samples < 250 * 640 and time.time() < deadline:
+            time.sleep(0.01)
+        for text, voice, at, seconds in (("我们先做登录", a, 0.2, 2.0), ("好的那我做注册吧", a, 2.5, 4.0),
+                                         ("注册下周给你", b, 7.0, 2.0)):
+            client.portal.call(functools.partial(hub._heard, text, voice, seconds=seconds, at=at))
+    wait_for(client, lambda s: len(s["lines"]) == 3)
+    voices = iter([[a], [a, a, b, b], [b]])                    # 中间那句后半截换了个人
+    hub.ready["ears"] = True
+    hub.ears.has_speaker_model = True
+    hub.ears.windows = lambda samples, starts, width: np.stack(next(voices))
+    hub.ears.timed = lambda samples, lead: (list("好的，那我做注册吧。"),
+                                           [0.2, 0.5, 1.9, 2.0, 2.2, 2.5, 2.8, 3.1, 3.4, 3.7])
+    hub.ears.recognize = lambda samples, lead: ""               # 重听认不出东西：留着原来的
+    client.post("/api/meeting/stop")
+    st = wait_for(client, lambda s: len(s["lines"]) == 4)
+    got = [(l["text"], l["speaker"], l["at"]) for l in st["lines"]]
+    first, second = got[0][1], got[3][1]
+    assert first != second
+    assert got == [("我们先做登录", first, 0.2), ("好的，", first, 2.5), ("那我做注册吧。", second, 4.375),
+                   ("注册下周给你", second, 7.0)]
