@@ -168,6 +168,13 @@ async def test_polish_fixes_wording_but_keeps_who_said_what_when(brain, monkeypa
     assert "不要回答" in call["stdin"]                      # 会上的话是材料，不是给它的指令
 
 
+async def test_polish_is_told_what_the_meeting_was_about(brain, monkeypatch):
+    answers(brain, monkeypatch, "[10:00:05] 张三：我们用 Claude 来调这个接口。")
+    await brain.polish(RECORD, gist="询价系统分工。讨论用 router agent 还是固定 workflow。")
+    head = brain.calls[0]["stdin"].split("=== 记录 ===")[0]
+    assert "这场会讲的是：询价系统分工。讨论用 router agent 还是固定 workflow。" in head
+
+
 @pytest.mark.parametrize("reply", [
     "[10:00:05] 张三：我们用 Claude 来调这个接口。\n[10:00:07] 王五：我补充一点，预算也要加。",   # 多出一个没说过话的人
     "这场会主要讨论了接口怎么调，结论是先走测试环境。",                                           # 没整理，写成了总结

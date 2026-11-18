@@ -87,8 +87,10 @@ class FakeWorker:
         self.summarized: list[str] = []
         self.polished = ""            # polish 交回的整理稿；空 = 没整理成
         self.polish_delay = 0.0
+        self.gists: list[str] = []    # 每次整理稿拿到的「这场会讲的是」
 
-    async def polish(self, transcript):
+    async def polish(self, transcript, gist=""):
+        self.gists.append(gist)
         await asyncio.sleep(self.polish_delay)
         return self.polished
 

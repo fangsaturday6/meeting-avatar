@@ -285,10 +285,11 @@ class SlowBrain:
                                 terms=await _terms(text))
         return await self._write(prompt, MINUTES_LIMIT)
 
-    async def polish(self, transcript: str) -> str:
+    async def polish(self, transcript: str, gist: str = "") -> str:
         """会后把对话整理成通顺的文字稿：改错字、去口头禅，谁在什么时候说的不变。
 
-        transcript 是会议记录里的对话部分。一段一段整理，哪一段没整理成（或没通过 checked_polish）就保留原文；
+        transcript 是会议记录里的对话部分；gist 是纪要里的标题和概要（`archive.gist_of`）——知道这场会在谈什么，
+        被认成碎片的行话才猜得回来（2026-11-17 实测：「虎疑」→回复、「电容器轮询」→定时器轮询、「ki」→skill）。一段一段整理，哪一段没整理成（或没通过 checked_polish）就保留原文；
         全都没成返回空。背景只带这场会自己的（议题、主项目、主人的名字），所以替主人开会时也不会带出别的事；
         常用词表里也只带和这一段读音对得上的词（见 glossary.py）。
         """
@@ -301,8 +302,9 @@ class SlowBrain:
                 chunks.append([])
             chunks[-1].append(row)
         s = self.settings
-        about = "".join(f"{label}：{' '.join(value.split())[:300]}。" for label, value in (
-            ("这场会的背景", s.topic), ("讨论的项目", Path(s.project_dir).name if s.project_dir else ""),
+        about = "".join(f"{label}：{' '.join(value.split())[:300].rstrip('。')}。" for label, value in (
+            ("这场会的背景", s.topic), ("这场会讲的是", gist),
+            ("讨论的项目", Path(s.project_dir).name if s.project_dir else ""),
             ("AI 助手的主人", s.owner)) if value.strip())
         gate = asyncio.Semaphore(2)
         keep = (s.name, "旁注")

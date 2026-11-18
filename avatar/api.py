@@ -21,7 +21,7 @@ import numpy as np
 from pydantic import BaseModel, Field
 
 from . import connect, glossary, knowledge, mcp_server, models, rehear, turns
-from .archive import NO_CONTENT, Archive, checked_citations, dialogue_of, split_minutes
+from .archive import NO_CONTENT, Archive, checked_citations, dialogue_of, gist_of, split_minutes
 from .audio_in import AudioIn
 from .config import DESIGN_DIR, ENGAGEMENTS, KEEP_AUDIO, KEEP_HOURS, ROLES, SCENES, VOICES, Settings
 from .ears import Ears
@@ -485,12 +485,13 @@ class Hub:
             self.archive.set_minutes(meeting_id, title, summary, polished)
 
     async def _minutes(self, meeting_id: str, dialogue: str) -> None:
-        """纪要和整理稿（书面化的对话）同时开工。纪要快，写完就算整理好了；整理稿慢，好了再补进同一份记录。"""
+        """先写纪要，写完就算整理好了；再拿纪要的标题和概要当背景写整理稿（书面化的对话），好了再补进同一份记录。
+        整理稿要知道这场会在谈什么，才猜得回被认成碎片的行话，所以等纪要，不和它同时开工。"""
         state = "failed"
         if stale := self.polishing.pop(meeting_id, None):
             stale.cancel()          # 重新整理：上一次还没写完的整理稿不要了
         polish = getattr(self.worker, "polish", None)
-        draft = asyncio.create_task(polish(dialogue)) if polish else None
+        draft = None
         try:
             res = await self.worker.summarize(dialogue)
             if res.ok:
@@ -498,9 +499,10 @@ class Hub:
                 summary = checked_citations(summary, dialogue)
                 state = "done" if summary else "empty"
                 self._store_minutes(meeting_id, title, summary)
-                if not summary or not draft:
+                if not summary or not polish:
                     self._after_minutes(meeting_id, True)      # 没有整理稿可等了
-                if draft and summary:      # 没有纪要（整场都是杂音）就不要整理稿了
+                if polish and summary:     # 没有纪要（整场都是杂音）就不要整理稿了
+                    draft = asyncio.create_task(polish(dialogue, gist_of(title, summary)))
                     self.polishing[meeting_id] = asyncio.create_task(self._polished(meeting_id, title, summary, draft))
                     draft = None
             else:

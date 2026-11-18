@@ -247,6 +247,20 @@ def test_the_polished_transcript_arrives_after_the_minutes(client):
     assert "- 先做登录" in text and not client.hub.minuting and not client.hub.polishing
 
 
+def test_the_polish_is_told_what_the_minutes_say_the_meeting_was_about(client):
+    """整理稿等纪要写完再开工，拿纪要的标题和概要当背景：识别错的行话靠它才猜得回来。"""
+    client.hub.brain.replies = ["[静]"] * 20
+    client.hub.worker.minutes = "询价系统分工\n\n### 概要\n讨论用 router agent 还是固定 workflow。\n\n### 结论\n- 先固定"
+    client.hub.worker.polished = "[10:00:00] 张三：我们先用固定流程。"
+    client.post("/api/meeting/start")
+    for i in range(5):
+        client.post("/api/utterance", json={"speaker": "张三", "text": f"第{i}点我们先用固定流程"})
+    wait_for(client, lambda s: len(s["lines"]) == 5)
+    client.post("/api/meeting/stop")
+    wait_for(client, lambda s: not client.hub.minuting and not client.hub.polishing and client.hub.worker.gists)
+    assert client.hub.worker.gists == ["询价系统分工。讨论用 router agent 还是固定 workflow。"]
+
+
 def test_no_polished_transcript_when_there_is_nothing_worth_minutes(client):
     client.hub.brain.replies = ["[静]"] * 20
     client.hub.worker.minutes = "无实质内容"

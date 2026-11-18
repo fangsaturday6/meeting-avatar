@@ -147,6 +147,15 @@ def checked_citations(summary: str, dialogue: str) -> str:
     return _CITE.sub(keep, summary)
 
 
+def gist_of(title: str, summary: str) -> str:
+    """这场会讲的是什么：纪要的标题加「概要」一节，压成一行，给会后整理稿当背景（猜识别错的行话靠它）。
+    没有「概要」一节就拿正文开头凑合；小节名、出处时刻都不要。"""
+    head, mark, rest = summary.partition("### 概要")
+    body = re.split(r"(?m)^#{2,}", rest, maxsplit=1)[0] if mark else summary
+    body = " ".join(_CITE.sub("", re.sub(r"(?m)^#+\s*", "", body)).split())
+    return "。".join(p for p in (title.strip(), body) if p)
+
+
 def minutes_of(text: str) -> str:
     """一份会议记录里的纪要正文；没有就是空。只认「对话」之前的那一节（后面任务结果里引用的不算）。"""
     return text.partition("\n## 对话\n")[0].partition("\n## 纪要\n")[2].partition("\n## 整理稿\n")[0].strip()

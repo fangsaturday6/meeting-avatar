@@ -316,3 +316,12 @@ def test_off_the_record_lines_never_reach_the_file(tmp_path):
     assert "工资" not in text and "好的。" not in text
     assert text.count("（这段按要求没有记录）") == 1 and text.index("先说预算") < text.index("没有记录") < text.index("排期")
     assert a.recent()[0]["lines"] == 2
+
+
+def test_the_gist_of_the_minutes_is_the_title_and_the_overview():
+    summary = ("### 概要\n讨论询价流程用固定 workflow\n还是 router agent（16:23:43）。\n\n"
+               "### 结论\n- 先用固定流程（16:25:28）")
+    assert archive.gist_of("询价系统分工", summary) == "询价系统分工。讨论询价流程用固定 workflow 还是 router agent。"
+    # 没有「概要」一节：拿正文开头凑合，小节名和出处时刻不要
+    assert archive.gist_of("登录排期", "### 结论\n- 先做登录（10:00:05）") == "登录排期。结论 - 先做登录"
+    assert archive.gist_of("", "") == ""
