@@ -206,8 +206,8 @@ class _NoPolish:
         return getattr(self._w, name)
 
 
-async def pipeline(pcm: bytes, work: Path) -> dict:
-    """进程内起一个真实后台，喂完录音、散会，等纪要写好。返回记录全文、逐句结果和用时。"""
+async def pipeline(pcm: bytes, work: Path, polish: bool = False) -> dict:
+    """进程内起一个真实后台，喂完录音、散会，等纪要写好（polish 时连整理稿也等）。返回记录全文、逐句结果和用时。"""
     import httpx
 
     import avatar.meeting as meeting_mod
@@ -221,7 +221,7 @@ async def pipeline(pcm: bytes, work: Path) -> dict:
     meeting_mod.time = fake
     s = Settings()
     s.announce, s.silence_nudge = False, 0.0
-    hub = api.Hub(settings=s, brain=_SilentBrain(), worker=_NoPolish(SlowBrain(s)), save_settings=False,
+    hub = api.Hub(settings=s, brain=_SilentBrain(), worker=SlowBrain(s) if polish else _NoPolish(SlowBrain(s)), save_settings=False,
                   archive=Archive(work / "meetings"), audio_store=AudioStore(work / "audio"))
     fake.hub = hub
     app = api.create_app(hub)
@@ -250,6 +250,8 @@ async def pipeline(pcm: bytes, work: Path) -> dict:
             await asyncio.wait_for(asyncio.gather(*after), 600)          # 重听，再起纪要
         if rid in hub.minuting:
             await asyncio.wait_for(hub.minuting[rid], 600)
+        if polish and rid in hub.polishing:
+            await asyncio.wait_for(hub.polishing[rid], 1800)
         final = [{"at": l.at, "seconds": l.seconds, "text": l.text, "speaker_id": l.speaker_id}
                  for l in hub.meeting.lines if l.who == "human"]
         record = hub.archive.read(rid) or ""
