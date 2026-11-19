@@ -377,7 +377,8 @@ uv run python -m avatar.connect
 | `avatar/web/panel.*` | 设置窗口：记录和设置 |
 | `avatar/web/character.js` | 3D 舞台（镜头、灯光、状态色）和代码搭的备用形象（three.js，放在 `vendor/` 里，不联网）；`avatar.js` 是不支持 3D 时的 2D 备用形象 |
 | `avatar/web/model.js` | 从 `avatar/web/models/` 加载做好的 3D 形象（GLB 文件），按状态播动作、驱动脸 |
-| `tools/figure.py` | Blender 脚本：给形象绑骨、做每种状态的动作、导出 GLB |
+| `tools/hunyuan_prepare.py`、`tools/figure_hunyuan.py` | Blender 脚本：给混元生成的形象减面整理、绑骨补眼睛、做每种状态的动作，导出 `figure.glb`（`tools/weights_color.py` 按骨骼上色查权重） |
+| `tools/figure.py` | Blender 脚本：之前那版形象（Codex 设计的）绑骨做动作，导出 `cute-butcher.glb` |
 | `tools/glossary_import.py` | 命令行导入常用词：一份名单或一个公司本体仓库（后台没开着时用） |
 | `tools/meeting_bench.py` | 会议评测台：拿公开会议录音走整条流程，纪要和「理想纪要」对照人工转写逐条评判 |
 | `avatar/web/api.js`、`audio.js` | 接口与状态、收音与播放（两个窗口共用） |
@@ -386,32 +387,48 @@ uv run python -m avatar.connect
 
 ## 换形象
 
-现在的形象是「可爱屠夫打工人」，做好的文件就是仓库里的 `avatar/web/models/figure.glb`，装上直接能用。
-它是这样来的：原始造型是一个静态、没有骨骼的 Blender 文件（`cute-butcher.blend`，不在这个仓库里）；
-`tools/figure.py` 读它，绑骨、给每种状态做动作，导出成 GLB。
-原模型是照着正面做的，前后很薄，所以脚本还会把身体、头和腿前后撑厚，在后腰加一个围裙带子的结，
-并把缝隙里的阴影烘进顶点色，这样拖着转到侧面和背面也有体积。原模型腰间的钩子太细，脚本把它换成了一把大肉钩
-（粗环、裹皮的柄、带刃口和倒刺的弯钩，拴着一条铁链）。手上有原始造型文件时，改了造型或动作后重跑（`--src` 指到那个 `.blend`）：
+现在的形象是一个屠夫：在腾讯混元 3D 网页版用屠夫设定图（皮围裙、肩甲、铁链）生成的模型，一整块网格，150 万面，带贴图。
+做好的文件就是仓库里的 `avatar/web/models/figure.glb`，装上直接能用。原件不在这个仓库里
+（`~/Documents/3D-Characters/butcher-hunyuan/source.glb`），手上有原件时，改了动作后这样重新导出：
+
+```sh
+B=/Applications/Blender.app/Contents/MacOS/Blender
+$B -b --factory-startup --python tools/hunyuan_prepare.py               # 摆正、减到 9 万面、只留底色贴图，出正交图量尺寸（约 1 分钟）
+$B -b --factory-startup --python tools/figure_hunyuan.py -- --preview   # 绑骨、补眼睛、做动作，导出 figure.glb；预览图在那个目录的 preview/
+```
+
+| 状态 | 身体（动作片段，在 `tools/figure_hunyuan.py` 的 `CLIPS` 里） | 脸（页面按实时数据驱动，在 `model.js` 的 `FACE` 里） |
+|---|---|---|
+| 未开会 `off` | 垂头弓背，慢呼吸 | 闭眼 |
+| 在听 `listening` | 站着呼吸，重心左右换；有人说话时前倾。没人说话时隔几秒自己做一个小动作 | 眨眼、眼神游移；有人说话时抬眉 |
+| 在听且后台在干活 `working` | 掏出笔记本电脑，捧着敲键盘 | 眼睛看屏幕 |
+| 在想 `thinking` | 左手捋胡子 | 半眯眼，往斜上方看 |
+| 想发言 `waiting` | 举左手挥 | 抬眉 |
+| 在说 `speaking` | 两手在身前比划 | 胡子（下巴）按音量开合 |
+
+小动作（片段名以 `idle-` 开头）：左右张望、伸懒腰、拍肚子、原地跳、捋胡子。
+点他一下（不拖动）会马上来一个；有人说话时他不做小动作，专心听。要加新的，在 `CLIPS` 里加一个 `idle-名字` 就行，页面不用改。
+
+- 生成的眼睛是一团银灰，脚本在上面贴了眼白、眼珠（跟 `eyeL` / `eyeR` 转）和眼皮；胡子、眉毛按脸上的区域给 `jaw` / `brow` 权重。
+- 钩子、背上的刀、铁链都长在身上，不能单独动。胳膊最高举到比肩略高，再高腋下会扯坏。
+- 胳膊和肚子在网格上粘着，脚本沿交界切开（肩膀以下），分界线左右分开量的（`ARM_EDGE`）；抬胳膊扯出膜或腰边留下碎块时，
+  先用 `tools/weights_color.py` 看是哪块分错了。
+- 带贴图的材质在页面里会被灯光洗白，`model.js` 的 `TEXTURED` 压了底色和环境反光；纯色的模型不受影响。
+
+状态色出现在脚下的刻度环、轮廓光和电脑上；后台在干活时有两颗小光球绕着头转。
+脚下的刻度环同时是这场会的钟（`dial.js`）：一圈一小时，从他身后正中起顺时针亮起来，正右边是一刻钟、最靠前是半小时，
+亮段头上的小圆点是「现在」；走满一小时底圈变亮、再从头走。准确的数字开会时一直显示在窗口底部（`#meeting-time`）。
+
+### 之前那版（`cute-butcher.glb`）
+
+2026-11-19 以前的默认形象是 Codex 设计的「可爱屠夫打工人」：原始造型是一个静态、没有骨骼的 Blender 文件
+（`cute-butcher.blend`，不在这个仓库里），`tools/figure.py` 读它，前后撑厚、换上大肉钩和铁链、绑骨做动作，
+导出成 `avatar/web/models/cute-butcher.glb`（不进 git），`/?model=cute-butcher` 看它。它多一个甩钩子的小动作（`idle-hook`）。
+git 历史里 11-19 以前的 `figure.glb` 就是它。
 
 ```sh
 /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python tools/figure.py -- --src 造型.blend
 ```
-
-| 状态 | 身体（动作片段，在 `tools/figure.py` 的 `CLIPS` 里） | 脸（页面按实时数据驱动，在 `model.js` 的 `FACE` 里） |
-|---|---|---|
-| 未开会 `off` | 垂头弓背，慢呼吸 | 闭眼 |
-| 在听 `listening` | 站着呼吸，重心左右换；有人说话时前倾。没人说话时隔几秒自己做一个小动作 | 眨眼、眼神游移；有人说话时抬眉 |
-| 在听且后台在干活 `working` | 掏出笔记本电脑，托着敲键盘，偶尔抬头 | 眼睛看屏幕 |
-| 在想 `thinking` | 左手捋胡子，抬头 | 半眯眼，往斜上方看 |
-| 想发言 `waiting` | 举左手挥，身子一颠一颠，腰间钩子跟着晃 | 抬眉 |
-| 在说 `speaking` | 左手在身前比划 | 胡子（下巴）按音量开合 |
-
-小动作（片段名以 `idle-` 开头）：扶耳机点头、原地跳、甩钩子（带着铁链横着甩出去，到头溅血，再一把拽回来接住）、伸懒腰、拍肚子、左右张望。
-点他一下（不拖动）会马上来一个；有人说话时他不做小动作，专心听。要加新的，在 `CLIPS` 里加一个 `idle-名字` 就行，页面不用改。
-
-状态色出现在脚下的刻度环、轮廓光、耳机两侧的标志和电脑上；后台在干活时有两颗小光球绕着头转。
-脚下的刻度环同时是这场会的钟（`dial.js`）：一圈一小时，从他身后正中起顺时针亮起来，正右边是一刻钟、最靠前是半小时，
-亮段头上的小圆点是「现在」；走满一小时底圈变亮、再从头走。准确的数字开会时一直显示在窗口底部（`#meeting-time`）。
 
 换别的模型：把 GLB 放进 `avatar/web/models/`（除了自带的 `figure.glb`，这个目录里的文件不进 git），刷新就生效，不用改代码。
 
@@ -419,7 +436,7 @@ uv run python -m avatar.connect
 - `名字.thinking.glb` 这样的文件：那种状态单独的动作，可选，要和本体是同一副骨骼。
 - 目录里有多个形象时用叫 `figure.glb` 的，没有就用第一个；`/?model=名字` 临时看某一个，`/?model=0` 看代码搭的备用形象，
   `/?pose=speaking&mouth=0.8` 看张嘴，`/?turn=135` 转过 135 度站着（看侧面和背面），
-  `/?pose=listening&act=idle-hook` 反复播某一个小动作。
+  `/?pose=listening&act=idle-beard` 反复播某一个小动作。
 - 骨骼和材质的命名约定写在 `model.js` 开头。形象要原创，不要用现成游戏里的角色模型。
 
 ## 测试

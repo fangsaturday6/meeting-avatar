@@ -1,4 +1,5 @@
 """给 Codex 设计的「可爱屠夫打工人」绑骨、做每种状态的动作，导出成页面用的 GLB。
+2026-11-19 起默认形象换成了混元生成的那版（tools/figure_hunyuan.py），这一版留着备用。
 
     /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python tools/figure.py
     可选：-- --src 原模型.blend  --out 导出路径  --blend 另存一份绑好骨的工程文件
@@ -7,7 +8,7 @@
 由那个目录里的 build_character.py 生成。这个脚本只读它，不改它；造型要改去改那边，改完重跑这里。
 原模型是照着正面做的，前后很薄，转到侧面像块板。所以这里先把身体和头前后撑厚（见「加厚」一节），
 再把缝隙和被挡住的地方的阴影烘进顶点色，转着看才有体积。
-导出到 avatar/web/models/figure.glb，页面刷新就换上（见 avatar/web/model.js）。和页面的约定：
+导出到 avatar/web/models/cute-butcher.glb（不进 git），页面用 /?model=cute-butcher 看（见 avatar/web/model.js）。和页面的约定：
 - 动作片段：名字是状态名的（listening / thinking / waiting / speaking / off）在那种状态循环播；working 在后台干活时播（敲电脑）；
   idle-* 是站着时自己做的小动作（扶耳机、跳、甩钩子、伸懒腰、拍肚子、张望），页面隔几秒挑一个播一遍。
 - 骨骼 laptop 带着笔记本电脑，平时由页面缩到看不见，干活时放出来。
@@ -34,7 +35,7 @@ def arg(name, default):
 
 
 SRC = arg("--src", Path.home() / "Documents/3D-Characters/cute-butcher/cute-butcher.blend")
-OUT = arg("--out", Path(__file__).resolve().parent.parent / "avatar/web/models/figure.glb")
+OUT = arg("--out", Path(__file__).resolve().parent.parent / "avatar/web/models/cute-butcher.glb")
 BLEND = arg("--blend", None)
 
 

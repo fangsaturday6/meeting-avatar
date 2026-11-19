@@ -78,7 +78,7 @@
 
 - 新文件 `avatar/health.py`：吃 `AudioIn` 的统计，5 秒窗口算三件事——全零比例、丢帧比例、电平过低时长。输出 `mic.health = ok | silent | dropping | quiet | denied`（`denied` 来自前端 `getUserMedia` 报错）。
 - 状态走 `Meeting.set_flag` → 快照和事件里有，`GET /api/state` 就能读到（Agent 不读页面也知道）。
-- 主窗口：不加文字，用形象表达——听不清时做「侧耳 / 敲麦克风」类动作。需要在 `tools/figure.py` 的 `CLIPS` 加一个动作并重新导出，备用形象在 `character.js` 的 `POSES` 加一个姿势。颜色不占用青紫琥珀橙红。
+- 主窗口：不加文字，用形象表达——听不清时做「侧耳 / 敲麦克风」类动作。需要在 `tools/figure_hunyuan.py` 的 `CLIPS` 加一个动作并重新导出，备用形象在 `character.js` 的 `POSES` 加一个姿势。颜色不占用青紫琥珀橙红。
 - 设置窗口里的麦克风一栏显示健康状态和一句人话（「一直收到的是静音，看看麦克风是不是被关了」），不出现原始报错。
 - 顺带：会议结束时确认两个 `AudioContext` 都关闭（报告提到 Electron 下不关会让电脑不休眠）。
 

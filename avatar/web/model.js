@@ -1,6 +1,6 @@
 // 从文件加载的 3D 形象：avatar/web/models/<名字>.glb，另可带每种状态一个动作文件 <名字>.<状态>.glb。
 // 带骨骼和动作最好；只有一个静态模型也能用（靠整体起伏和点头表现神态）。
-// 和模型的约定（tools/figure.py 按这个导出，别的模型有多少算多少）：
+// 和模型的约定（tools/figure_hunyuan.py、tools/figure.py 按这个导出，别的模型有多少算多少）：
 //   动作片段叫状态名（listening / thinking / waiting / speaking / off）就在那种状态循环播；
 //   叫 working 的在「在听 + 后台在干活」时播（敲电脑），骨骼 laptop 带着电脑，只在这时放出来；
 //   叫 idle-* 的是小动作：在听、没人说话时隔几秒挑一个播一遍，点他一下也会来一个；
@@ -14,6 +14,7 @@ import { GLTFLoader } from './vendor/three/GLTFLoader.js';
 const HEIGHT = 3.6;      // 和代码搭的形象一样高，镜头不用跟着改
 const FADE = 0.35;       // 动作之间过渡的秒数
 const REST_GAP = [3.5, 8];   // 两个小动作之间歇多少秒（最短、最长）
+const TEXTURED = { tint: 0.68, env: 0.2 };     // 带贴图的材质：底色压多少、环境反光留多少（见 loadModel 里摆正之后那段）
 // 模型文件自带多个动作时，每种状态按顺序找名字里带这些词的；都没有就用待机动作
 const WORDS = {
   off: ['sleep', 'sit'],
@@ -95,6 +96,16 @@ export async function loadModel(figure) {
   holder.add(body); holder.scale.setScalar(scale);
 
   const glows = materials.filter((m) => /^glow/i.test(m.name));
+  // 带贴图的模型（混元生成的那版屠夫）：贴图里自带颜色和一部分明暗，照纯色模型调的灯光、环境反光再过 ACES 会被洗白。
+  // 去掉大半环境反光、压一点底色，留住饱和度。纯色材质（Codex 那版）没有贴图，不受影响
+  for (const m of materials) {
+    if (!m.map || glows.includes(m)) continue;
+    m.color.multiplyScalar(TEXTURED.tint);
+    m.envMapIntensity = TEXTURED.env;
+    m.metalness = 0;
+    m.roughness = Math.max(m.roughness, 0.8);
+    m.needsUpdate = true;
+  }
   const radius = Math.min(Math.max(size.x, size.z) * scale * 0.5 + 0.2, HEIGHT * 0.42);     // 脚下的刻度环画多大：比人宽一点
 
   const root = new THREE.Group();
